@@ -1,10 +1,11 @@
-import type { DescriptionInfo, Mention, TranscriptSegment } from "../shared/types";
+import type { DescriptionInfo, TranscriptSegment } from "../shared/types";
 import { parseYouTubeId, youtubeWatchUrl } from "../shared/youtube-url";
 import { must, ok, type Db } from "./db";
 import { HttpError } from "./auth";
 import { domainOf, expandShortLinks, extractChapters, extractDescriptionLinks, extractTranscriptLinks, mergeLinks } from "./links";
 import { getTranscript, segmentsToText, type TranscriptAttempt } from "./transcript";
-import { fetchVideo } from "./youtube";
+import { cleanAnalysis, safeUrl } from "./sanitize";
+import { fetchVideo, type FetchedVideo } from "./youtube";
 
 type Fetch = typeof fetch;
 
@@ -40,7 +41,7 @@ async function insertLinks(
   db: Db,
   userId: string,
   itemId: string,
-  links: { url: string; domain: string; context: string; source: string; timestamp_sec: number | null; original_url?: string | null }[],
+  links: { url: string; domain: string; context: string; source: string; timestamp_sec: number | null; original_url?: string | null; label?: string | null }[],
 ) {
   if (!links.length) return;
   const rows = links.map((l) => ({
@@ -48,6 +49,7 @@ async function insertLinks(
     item_id: itemId,
     url: l.url,
     original_url: l.original_url ?? null,
+    label: l.label ?? null,
     domain: l.domain,
     context: l.context || null,
     source: l.source,
@@ -55,6 +57,40 @@ async function insertLinks(
   }));
   ok(await db.from("links").upsert(rows, { onConflict: "item_id,url", ignoreDuplicates: true }), "save links");
 }
+
+/** Save a YouTube video: metadata, description, transcript, links, chapters. */
+/** Longest transcript we store (a ~10 hour talk); keeps rows and the search index bounded. */
+export const MAX_TRANSCRIPT_CHARS = 400_000;
+
+interface TranscriptOutcome {
+  segments: TranscriptSegment[];
+  text: string | null;
+  lang: string | null;
+  source: string | null;
+  attempts: TranscriptAttempt[];
+}
+
+/** Manual text if given, otherwise the free → paid provider chain. */
+async function resolveTranscript(
+  db: Db,
+  userId: string,
+  youtubeId: string,
+  video: FetchedVideo,
+  manualTranscript: string | undefined,
+  fetchImpl: Fetch,
+): Promise<TranscriptOutcome> {
+  if (manualTranscript?.trim()) {
+    return { segments: [], text: manualTranscript.trim().slice(0, MAX_TRANSCRIPT_CHARS), lang: null, source: "manual", attempts: [] };
+  }
+  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
+  const attempts = video.captionsError ? [{ source: "youtube", error: video.captionsError }, ...t.attempts] : t.attempts;
+  if (!t.result) return { segments: [], text: null, lang: null, source: null, attempts };
+  const text = segmentsToText(t.result.segments).slice(0, MAX_TRANSCRIPT_CHARS);
+  return { segments: t.result.segments, text, lang: t.result.lang, source: t.result.source, attempts };
+}
+
+const describeAttempts = (attempts: TranscriptAttempt[]) =>
+  attempts.map((a) => `${a.source}: ${a.error}`).join(" · ") || "No transcript source available";
 
 /** Save a YouTube video: metadata, description, transcript, links, chapters. */
 export async function ingestVideo(
@@ -66,6 +102,7 @@ export async function ingestVideo(
 ): Promise<IngestResult> {
   const youtubeId = parseYouTubeId(url);
   if (!youtubeId) throw new HttpError(400, "That doesn't look like a YouTube video link");
+  const sourceUrl = youtubeWatchUrl(youtubeId);
 
   const existing = await db
     .from("video_details")
@@ -89,33 +126,18 @@ export async function ingestVideo(
 
   const video = await fetchVideo(youtubeId, fetchImpl);
   const { meta } = video;
+  const t = await resolveTranscript(db, userId, youtubeId, video, opts.manualTranscript, fetchImpl);
 
-  let segments: TranscriptSegment[] = [];
-  let transcriptText: string | null = null;
-  let transcriptLang: string | null = null;
-  let transcriptSource: string | null = null;
-  let attempts: TranscriptAttempt[] = [];
-
-  if (opts.manualTranscript?.trim()) {
-    transcriptText = opts.manualTranscript.trim();
-    transcriptSource = "manual";
-  } else {
-    const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
-    attempts = t.attempts;
-    if (video.captionsError) attempts.unshift({ source: "youtube", error: video.captionsError });
-    if (t.result) {
-      segments = t.result.segments;
-      transcriptText = segmentsToText(segments);
-      transcriptLang = t.result.lang;
-      transcriptSource = t.result.source;
-    }
-  }
-
-  const links = await expandShortLinks(
-    mergeLinks(extractDescriptionLinks(meta.description), extractTranscriptLinks(segments)),
-    fetchImpl,
+  const links = dedupeByUrl(
+    await expandShortLinks(mergeLinks(extractDescriptionLinks(meta.description), extractTranscriptLinks(t.segments)), fetchImpl),
   );
   const chapters = extractChapters(meta.description);
+
+  // A previous attempt killed between the two inserts (e.g. function timeout) leaves an
+  // item without details; remove it so the video can be saved again.
+  const { data: stale } = await db.from("items").select("id, video_details(item_id)").eq("user_id", userId).eq("source_url", sourceUrl);
+  const orphans = (stale ?? []).filter((r) => !(r.video_details as unknown as { item_id: string } | null)?.item_id).map((r) => r.id);
+  if (orphans.length) await db.from("items").delete().in("id", orphans).eq("user_id", userId);
 
   const item = must(
     await db
@@ -124,9 +146,9 @@ export async function ingestVideo(
         user_id: userId,
         type: "video",
         title: meta.title || `YouTube video ${youtubeId}`,
-        source_url: youtubeWatchUrl(youtubeId),
-        status: transcriptText ? "fetched" : "transcript_pending",
-        error: transcriptText ? null : attempts.map((a) => `${a.source}: ${a.error}`).join(" · ") || "No transcript source available",
+        source_url: sourceUrl,
+        status: t.text ? "fetched" : "transcript_pending",
+        error: t.text ? null : describeAttempts(t.attempts),
       })
       .select("id, title, status")
       .single(),
@@ -145,10 +167,10 @@ export async function ingestVideo(
         published_at: meta.published_at,
         duration_sec: meta.duration_sec,
         description: meta.description,
-        transcript: transcriptText,
-        transcript_segments: segments,
-        transcript_lang: transcriptLang,
-        transcript_source: transcriptSource,
+        transcript: t.text,
+        transcript_segments: t.segments,
+        transcript_lang: t.lang,
+        transcript_source: t.source,
         description_info: chapters,
       }),
       "save video details",
@@ -165,10 +187,15 @@ export async function ingestVideo(
     already_saved: false,
     title: item.title,
     status: item.status,
-    transcript_source: transcriptSource,
-    transcript_errors: transcriptText ? [] : attempts,
+    transcript_source: t.source,
+    transcript_errors: t.text ? [] : t.attempts,
     link_count: links.length,
   };
+}
+
+function dedupeByUrl<T extends { url: string }>(links: T[]): T[] {
+  const seen = new Set<string>();
+  return links.filter((l) => !seen.has(l.url) && (seen.add(l.url), true));
 }
 
 async function ownedItem(db: Db, userId: string, itemId: string) {
@@ -177,115 +204,120 @@ async function ownedItem(db: Db, userId: string, itemId: string) {
   return data;
 }
 
-/** Re-try fetching a transcript (or store one pasted by the user). */
+/**
+ * Re-try fetching a transcript (or store one pasted by the user). Also fills in
+ * description, links and chapters when the first save only got basic metadata.
+ */
 export async function retryTranscript(db: Db, userId: string, itemId: string, manualTranscript?: string, fetchImpl: Fetch = fetch) {
-  await ownedItem(db, userId, itemId);
+  const item = await ownedItem(db, userId, itemId);
   const vd = must(
-    await db.from("video_details").select("youtube_id").eq("item_id", itemId).single(),
+    await db.from("video_details").select("youtube_id, transcript, description").eq("item_id", itemId).single(),
     "load video",
   );
-
-  let segments: TranscriptSegment[] = [];
-  let text: string | null = null;
-  let lang: string | null = null;
-  let source: string | null = null;
-  let attempts: TranscriptAttempt[] = [];
-
-  if (manualTranscript?.trim()) {
-    text = manualTranscript.trim();
-    source = "manual";
-  } else {
-    const video = await fetchVideo(vd.youtube_id, fetchImpl);
-    const t = await getTranscript(vd.youtube_id, video.captionTracks, await userKeys(db, userId), fetchImpl);
-    attempts = t.attempts;
-    if (video.captionsError) attempts.unshift({ source: "youtube", error: video.captionsError });
-    if (t.result) {
-      segments = t.result.segments;
-      text = segmentsToText(segments);
-      lang = t.result.lang;
-      source = t.result.source;
-    }
+  if (vd.transcript && !manualTranscript?.trim()) {
+    return { ok: true, source: "existing", length: vd.transcript.length, note: "This item already has a transcript." };
   }
 
-  if (!text) {
-    const error = attempts.map((a) => `${a.source}: ${a.error}`).join(" · ") || "No transcript source available";
-    ok(await db.from("items").update({ status: "transcript_pending", error }).eq("id", itemId), "update item");
-    return { ok: false, error, attempts };
+  const video = manualTranscript?.trim() && vd.description ? null : await fetchVideo(vd.youtube_id, fetchImpl);
+
+  // Repair metadata that the oEmbed fallback could not provide on the first save.
+  if (video && !vd.description && video.meta.description) {
+    const m = video.meta;
+    ok(
+      await db
+        .from("video_details")
+        .update({
+          description: m.description,
+          duration_sec: m.duration_sec,
+          published_at: m.published_at,
+          channel_url: m.channel_url,
+          description_info: extractChapters(m.description),
+        })
+        .eq("item_id", itemId),
+      "update video details",
+    );
+    await insertLinks(db, userId, itemId, dedupeByUrl(await expandShortLinks(extractDescriptionLinks(m.description), fetchImpl)));
+  }
+
+  const t = video
+    ? await resolveTranscript(db, userId, vd.youtube_id, video, manualTranscript, fetchImpl)
+    : await resolveTranscript(db, userId, vd.youtube_id, { meta: {} as FetchedVideo["meta"], captionTracks: [] }, manualTranscript, fetchImpl);
+
+  if (!t.text) {
+    const error = describeAttempts(t.attempts);
+    if (item.status !== "analyzed") {
+      ok(await db.from("items").update({ status: "transcript_pending", error }).eq("id", itemId), "update item");
+    }
+    return { ok: false, error, attempts: t.attempts };
   }
 
   ok(
     await db
       .from("video_details")
-      .update({ transcript: text, transcript_segments: segments, transcript_lang: lang, transcript_source: source })
+      .update({ transcript: t.text, transcript_segments: t.segments, transcript_lang: t.lang, transcript_source: t.source })
       .eq("item_id", itemId),
     "save transcript",
   );
-  await insertLinks(db, userId, itemId, extractTranscriptLinks(segments));
+  await insertLinks(db, userId, itemId, extractTranscriptLinks(t.segments));
   ok(await db.from("items").update({ status: "fetched", error: null }).eq("id", itemId).eq("status", "transcript_pending"), "update item");
-  return { ok: true, source, length: text.length };
+  return { ok: true, source: t.source, length: t.text.length };
 }
 
-export interface AnalysisInput {
-  item_id: string;
-  summary: string;
-  key_points?: string[];
-  topics?: string[];
-  description_info?: DescriptionInfo[];
-  mentions?: Mention[];
-  link_labels?: { url: string; label: string; context?: string }[];
-  extra_links?: { url: string; label: string; context?: string; timestamp_sec?: number }[];
-  title?: string;
-}
+export type AnalysisInput = { item_id: string } & Record<string, unknown>;
 
 /** Store the AI's analysis of an item (called by Claude through MCP). */
-export async function saveAnalysis(db: Db, userId: string, a: AnalysisInput) {
-  const item = await ownedItem(db, userId, a.item_id);
+export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput) {
+  const item = await ownedItem(db, userId, input.item_id);
+  const a = cleanAnalysis(input);
 
   const patch: Record<string, unknown> = {
     summary: a.summary,
-    key_points: a.key_points ?? [],
+    key_points: a.key_points,
     analyzed_at: new Date().toISOString(),
-    error: null,
   };
-  if (item.status !== "transcript_pending") patch.status = "analyzed";
-  if (a.title?.trim()) patch.title = a.title.trim();
-  ok(await db.from("items").update(patch).eq("id", a.item_id), "save summary");
+  // Keep the "why is the transcript missing" message until a transcript arrives.
+  if (item.status !== "transcript_pending") {
+    patch.status = "analyzed";
+    patch.error = null;
+  }
+  if (a.title) patch.title = a.title;
+  ok(await db.from("items").update(patch).eq("id", item.id), "save summary");
 
   if (item.type === "video" && (a.description_info || a.mentions)) {
     const vd = must(
-      await db.from("video_details").select("description_info").eq("item_id", a.item_id).single(),
+      await db.from("video_details").select("description_info").eq("item_id", item.id).single(),
       "load video",
     );
     const chapters = ((vd.description_info ?? []) as DescriptionInfo[]).filter((d) => d.kind === "chapter");
     const update: Record<string, unknown> = {};
     if (a.description_info) update.description_info = [...chapters, ...a.description_info.filter((d) => d.kind !== "chapter")];
     if (a.mentions) update.mentions = a.mentions;
-    ok(await db.from("video_details").update(update).eq("item_id", a.item_id), "save details");
+    ok(await db.from("video_details").update(update).eq("item_id", item.id), "save details");
   }
 
-  for (const l of a.link_labels ?? []) {
+  for (const l of a.link_labels) {
     const patchLink: Record<string, unknown> = { label: l.label };
     if (l.context) patchLink.context = l.context;
-    await db.from("links").update(patchLink).eq("item_id", a.item_id).eq("url", l.url);
+    await db.from("links").update(patchLink).eq("item_id", item.id).eq("user_id", userId).eq("url", l.url);
   }
-  if (a.extra_links?.length) {
+  if (a.extra_links.length) {
     await insertLinks(
       db,
       userId,
-      a.item_id,
+      item.id,
       a.extra_links.map((l) => ({
         url: l.url,
         domain: domainOf(l.url),
+        label: l.label,
         context: l.context ?? "",
         source: "ai",
-        timestamp_sec: l.timestamp_sec ?? null,
+        timestamp_sec: l.timestamp_sec,
       })),
     );
-    for (const l of a.extra_links) await db.from("links").update({ label: l.label }).eq("item_id", a.item_id).eq("url", l.url);
   }
 
-  if (a.topics) await setTopics(db, userId, a.item_id, a.topics, { replace: true });
-  return { ok: true, item_id: a.item_id };
+  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
+  return { ok: true, item_id: item.id, topics: a.topics, links_labelled: a.link_labels.length, links_added: a.extra_links.length };
 }
 
 async function ensureTags(db: Db, userId: string, names: string[]): Promise<{ id: string; name: string }[]> {
@@ -337,10 +369,10 @@ export async function getItem(db: Db, userId: string, itemId: string, opts: { in
   const cols = `youtube_id, channel, thumbnail, published_at, duration_sec, description, description_info, mentions, transcript_lang, transcript_source${opts.includeTranscript ? ", transcript" : ""}`;
   const [video, links, tags, notes, collections] = await Promise.all([
     db.from("video_details").select(cols).eq("item_id", itemId).maybeSingle(),
-    db.from("links").select("url, domain, label, context, source, timestamp_sec").eq("item_id", itemId).order("created_at"),
-    db.from("item_tags").select("tags(name)").eq("item_id", itemId),
-    db.from("notes").select("id, body, updated_at").eq("item_id", itemId).order("created_at"),
-    db.from("collection_items").select("collections(name)").eq("item_id", itemId),
+    db.from("links").select("url, domain, label, context, source, timestamp_sec").eq("item_id", itemId).eq("user_id", userId).order("created_at"),
+    db.from("item_tags").select("tags(name)").eq("item_id", itemId).eq("user_id", userId),
+    db.from("notes").select("id, body, updated_at").eq("item_id", itemId).eq("user_id", userId).order("created_at"),
+    db.from("collection_items").select("collections(name)").eq("item_id", itemId).eq("user_id", userId),
   ]);
   return {
     ...item,
@@ -353,6 +385,10 @@ export async function getItem(db: Db, userId: string, itemId: string, opts: { in
 }
 
 const TRANSCRIPT_PAGE = 40_000;
+
+function clampInt(v: number | undefined, min: number, max: number, fallback: number): number {
+  return v === undefined || !Number.isFinite(v) ? fallback : Math.min(max, Math.max(min, Math.floor(v)));
+}
 
 /** Transcript text in pages, so very long videos fit in a tool result. */
 export async function getTranscriptPage(db: Db, userId: string, itemId: string, page = 1) {
@@ -367,7 +403,7 @@ export async function getTranscriptPage(db: Db, userId: string, itemId: string, 
     ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n")
     : (vd.transcript ?? "");
   const pages = Math.max(1, Math.ceil(full.length / TRANSCRIPT_PAGE));
-  const p = Math.min(Math.max(1, page), pages);
+  const p = Math.min(Math.max(1, Math.floor(page) || 1), pages);
   return {
     item_id: itemId,
     language: vd.transcript_lang,
@@ -388,7 +424,7 @@ export async function searchLibrary(
       p_type: args.type ?? null,
       p_tag: args.topic ?? null,
       p_status: args.status ?? null,
-      p_limit: args.limit ?? 20,
+      p_limit: clampInt(args.limit, 1, 100, 20),
       p_user: userId,
     }),
     "search",
@@ -401,7 +437,7 @@ export async function listLinks(db: Db, userId: string, args: { query?: string; 
     .select("url, domain, label, context, source, timestamp_sec, item_id, items!inner(title)")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
-    .limit(Math.min(args.limit ?? 50, 200));
+    .limit(clampInt(args.limit, 1, 200, 50));
   if (args.domain) q = q.ilike("domain", `%${args.domain}%`);
   if (args.query) {
     const s = args.query.replace(/[%,()]/g, " ");
@@ -422,12 +458,22 @@ export async function addNote(db: Db, userId: string, itemId: string, body: stri
 
 export async function addLink(db: Db, userId: string, itemId: string, url: string, label?: string, context?: string) {
   await ownedItem(db, userId, itemId);
-  const normalized = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`).toString();
+  const normalized = safeUrl(url);
+  if (!normalized) throw new HttpError(400, "Only http(s) web links can be saved");
+  const { data: existing } = await db.from("links").select("id").eq("item_id", itemId).eq("url", normalized).maybeSingle();
+  if (existing) {
+    // Keep the original source and any label already there unless a new one is given.
+    const patch: Record<string, unknown> = {};
+    if (label) patch.label = label;
+    if (context) patch.context = context;
+    if (Object.keys(patch).length) ok(await db.from("links").update(patch).eq("id", existing.id), "update link");
+    return { ok: true, url: normalized, already_saved: true };
+  }
   ok(
-    await db.from("links").upsert(
-      { user_id: userId, item_id: itemId, url: normalized, domain: domainOf(normalized), label: label ?? null, context: context ?? null, source: "manual" },
-      { onConflict: "item_id,url" },
-    ),
+    await db.from("links").insert({
+      user_id: userId, item_id: itemId, url: normalized, domain: domainOf(normalized),
+      label: label ?? null, context: context ?? null, source: "manual",
+    }),
     "add link",
   );
   return { ok: true, url: normalized };
@@ -459,7 +505,7 @@ export async function listPending(db: Db, userId: string, limit = 20) {
       .in("status", ["fetched", "transcript_pending"])
       .is("analyzed_at", null)
       .order("created_at", { ascending: true })
-      .limit(limit),
+      .limit(clampInt(limit, 1, 100, 20)),
     "list pending",
   );
 }

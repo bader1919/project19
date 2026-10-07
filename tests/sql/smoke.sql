@@ -32,7 +32,24 @@ select name, item_count from topic_counts();
 \echo '--- weird input does not error ---'
 select count(*) from search_library($q$it's a "test" (with) :* & | ! \ chars$q$);
 
+\echo '--- LIKE wildcards are literal (expect 0) ---'
+select count(*) as underscore_hits from search_library('_');
+\echo '--- topic rename refreshes search (expect 1) ---'
+update tags set name = 'Vector Stores' where id = 'bbbbbbbb-0000-0000-0000-000000000001';
+select count(*) as renamed_topic_hits from search_library('vector stores');
+
 \echo '--- other user sees nothing ---'
 select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
 select count(*) as other_user_rows from search_library(null);
 select count(*) as other_user_items from items;
+select count(*) as other_user_search_as_a from search_library(null, p_user => '11111111-1111-1111-1111-111111111111');
+\echo '--- other user cannot read A via build_search_doc (expect empty-ish doc) ---'
+select build_search_doc('aaaaaaaa-0000-0000-0000-000000000001', '', '', '[]', '{}') as leaked_doc;
+\echo '--- other user cannot attach rows to A item (each expect RLS error) ---'
+\set ON_ERROR_STOP 0
+insert into notes (item_id, body) values ('aaaaaaaa-0000-0000-0000-000000000001', 'injected');
+insert into links (item_id, url) values ('aaaaaaaa-0000-0000-0000-000000000001', 'https://evil.example');
+insert into item_tags (item_id, tag_id) values ('aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000001');
+\set ON_ERROR_STOP 1
+reset role;
+select count(*) as injected_rows from notes where body = 'injected';

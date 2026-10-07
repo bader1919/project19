@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { MODULES } from "../modules/registry";
 import { AddVideoDialog } from "../components/AddVideoDialog";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 
 const MAIN_NAV = [
   { to: "/", label: "Home", icon: Home, end: true },
@@ -154,7 +155,9 @@ export function AppShell() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
-        <Outlet />
+        <ErrorBoundary resetKey={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
 
       {(adding || isAddRoute) && (

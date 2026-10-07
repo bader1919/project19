@@ -119,7 +119,25 @@ export function extractChapters(description: string): DescriptionInfo[] {
   return chapters.length >= 2 && chapters[0].timestamp_sec === 0 ? chapters : [];
 }
 
-/** Resolve link-shortener URLs to their destination (best effort, bounded time). */
+/** True for hosts a server-side request must never reach (loopback, private, link-local, metadata). */
+export function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (!h.includes(".") && !h.includes(":")) return true;
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (h.includes(":")) return h === "::1" || h === "::" || /^(fc|fd|fe8|fe9|fea|feb)/.test(h) || h.startsWith("::ffff:");
+  return false;
+}
+
+/**
+ * Resolve link-shortener URLs to their destination (best effort, bounded time).
+ * Redirects are followed by hand, one hop at a time, and never into private networks.
+ */
 export async function expandShortLinks<T extends { url: string; original_url?: string | null; domain: string }>(
   links: T[],
   fetchImpl: typeof fetch = fetch,
@@ -129,10 +147,17 @@ export async function expandShortLinks<T extends { url: string; original_url?: s
     links.map(async (l) => {
       if (!SHORTENER_HOSTS.has(l.domain)) return l;
       try {
-        const res = await fetchImpl(l.url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
-        if (res.url && res.url !== l.url) {
-          return { ...l, original_url: l.url, url: res.url, domain: domainOf(res.url) };
+        let current = l.url;
+        for (let hop = 0; hop < 5; hop++) {
+          const res = await fetchImpl(current, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
+          const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+          if (!location) break;
+          const next = new URL(location, current);
+          if (!/^https?:$/.test(next.protocol) || isPrivateHost(next.hostname)) break;
+          current = next.toString();
+          if (!SHORTENER_HOSTS.has(domainOf(current))) break; // reached the real site — no need to contact it
         }
+        if (current !== l.url) return { ...l, original_url: l.url, url: current, domain: domainOf(current) };
       } catch {
         // keep the short link as-is
       }

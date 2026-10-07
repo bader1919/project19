@@ -5,6 +5,7 @@ import { formatTimestamp } from "../../shared/youtube-url";
 import { listLinks } from "../lib/data";
 import { useAsync } from "../lib/useAsync";
 import { EmptyState, ErrorBox, PageHeader, Spinner } from "../components/ui";
+import { SiteIcon, safeHref } from "../components/SiteIcon";
 
 export function Links() {
   const [q, setQ] = useState("");
@@ -50,9 +51,9 @@ export function Links() {
         <ul className="card divide-y divide-slate-100 dark:divide-slate-800">
           {links.data!.map((l) => (
             <li key={l.id} className="flex items-start gap-3 p-3.5">
-              <img src={`https://www.google.com/s2/favicons?domain=${l.domain}&sz=32`} alt="" className="mt-0.5 h-5 w-5 rounded" loading="lazy" />
+              <SiteIcon domain={l.domain} className="mt-0.5 h-5 w-5" />
               <div className="min-w-0 flex-1">
-                <a href={l.url} target="_blank" rel="noreferrer" className="font-medium hover:underline" dir="auto">{l.label || l.domain || l.url}</a>
+                <a href={safeHref(l.url)} target="_blank" rel="noreferrer" className="font-medium hover:underline" dir="auto">{l.label || l.domain || l.url}</a>
                 <p className="truncate text-xs text-brand-600">{l.url}</p>
                 {l.context && <p dir="auto" className="mt-0.5 line-clamp-1 text-xs text-slate-500">{l.context}</p>}
                 <Link to={`/item/${l.item_id}`} className="mt-1 inline-block text-xs text-slate-500 hover:text-brand-600 hover:underline" dir="auto">

@@ -72,7 +72,7 @@ Add the optional keys in **Settings → Transcript sources**.
 
 3. Deploy, open the site and sign in with your email (you'll get a magic link).
 
-> Tip: once you've signed in, you can turn off **Allow new users to sign up** in Supabase (**Authentication → Sign In / Providers**) so only you can use your library.
+> **Lock it to you:** after your first sign-in, turn off **Allow new users to sign up** in Supabase (**Authentication → Sign In / Providers**). For extra safety also add the Netlify variable `ALLOWED_EMAILS` = your email (comma-separate several); the server then refuses every other account.
 
 ### 3. Connect Claude
 

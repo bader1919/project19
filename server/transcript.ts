@@ -77,7 +77,7 @@ export async function fromSupadata(
   // Long videos / speech-to-text run as an async job.
   for (let i = 0; i < maxPolls; i++) {
     await new Promise((r) => setTimeout(r, pollMs));
-    const jr = await fetchImpl(`https://api.supadata.ai/v1/transcript/${body.jobId}`, { headers });
+    const jr = await fetchImpl(`https://api.supadata.ai/v1/transcript/${body.jobId}`, { headers, signal: AbortSignal.timeout(5000) });
     const job = (await jr.json().catch(() => ({}))) as SupadataResponse;
     if (job.status === "failed") throw new Error(`Supadata job failed: ${JSON.stringify(job.error ?? "")}`);
     const done = supadataSegments(job);

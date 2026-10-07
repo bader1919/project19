@@ -16,6 +16,7 @@ import { Collections } from "./pages/Collections";
 import { Notes } from "./pages/Notes";
 import { Settings } from "./pages/Settings";
 import { MODULES } from "./modules/registry";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 function App() {
   const { session, loading } = useSession();
@@ -46,10 +47,12 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <ErrorBoundary>
     <SessionProvider>
       <BrowserRouter>
         <App />
       </BrowserRouter>
     </SessionProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

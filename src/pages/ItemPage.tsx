@@ -12,6 +12,7 @@ import {
 } from "../lib/data";
 import { api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
+import { SiteIcon, safeHref } from "../components/SiteIcon";
 import { ErrorBox, Spinner, StatusBadge } from "../components/ui";
 
 type Tab = "overview" | "links" | "transcript" | "description";
@@ -74,10 +75,12 @@ function SummarySection({ item, onSaved }: { item: ItemFull; onSaved: () => void
   const [editing, setEditing] = useState(false);
   const [summary, setSummary] = useState(item.summary ?? "");
   const [points, setPoints] = useState((item.key_points ?? []).join("\n"));
+  const pointsKey = (item.key_points ?? []).join("\n");
   useEffect(() => {
+    if (editing) return; // never clobber an edit in progress when the item reloads
     setSummary(item.summary ?? "");
-    setPoints((item.key_points ?? []).join("\n"));
-  }, [item.summary, item.key_points]);
+    setPoints(pointsKey);
+  }, [item.summary, pointsKey, editing]);
 
   return (
     <Section
@@ -153,7 +156,7 @@ function DescriptionInfoSection({ info, onSeek }: { info: DescriptionInfo[]; onS
                 <li key={i}>
                   {d.text}
                   {d.url && (
-                    <a href={d.url} target="_blank" rel="noreferrer" className="ml-1.5 inline-flex items-center gap-0.5 text-brand-600 hover:underline">
+                    <a href={safeHref(d.url)} target="_blank" rel="noreferrer" className="ml-1.5 inline-flex items-center gap-0.5 text-brand-600 hover:underline">
                       link <ExternalLink className="h-3 w-3" />
                     </a>
                   )}
@@ -190,7 +193,7 @@ function MentionsSection({ item, onSeek }: { item: ItemFull; onSeek: (s: number)
             <span className="chip shrink-0 capitalize">{m.kind}</span>
             <div className="min-w-0 flex-1">
               <p className="font-medium">
-                {m.url ? <a href={m.url} target="_blank" rel="noreferrer" className="hover:underline">{m.name}</a> : m.name}
+                {m.url ? <a href={safeHref(m.url)} target="_blank" rel="noreferrer" className="hover:underline">{m.name}</a> : m.name}
               </p>
               {m.context && <p className="text-slate-500">{m.context}</p>}
             </div>
@@ -207,7 +210,7 @@ function LinkRowView({ link, onSeek, onChanged }: { link: LinkRow; onSeek: (s: n
   const [label, setLabel] = useState(link.label ?? "");
   return (
     <li className="group flex items-start gap-3 py-3">
-      <img src={`https://www.google.com/s2/favicons?domain=${link.domain}&sz=32`} alt="" className="mt-0.5 h-5 w-5 rounded" loading="lazy" />
+      <SiteIcon domain={link.domain} className="mt-0.5 h-5 w-5" />
       <div className="min-w-0 flex-1">
         {editing ? (
           <form
@@ -225,7 +228,7 @@ function LinkRowView({ link, onSeek, onChanged }: { link: LinkRow; onSeek: (s: n
         ) : (
           <p dir="auto" className="font-medium">{link.label || link.domain}</p>
         )}
-        <a href={link.url} target="_blank" rel="noreferrer" className="block truncate text-sm text-brand-600 hover:underline">{link.url}</a>
+        <a href={safeHref(link.url)} target="_blank" rel="noreferrer" className="block truncate text-sm text-brand-600 hover:underline">{link.url}</a>
         {link.context && <p dir="auto" className="mt-0.5 line-clamp-2 text-xs text-slate-500">{link.context}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -359,17 +362,44 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
 
 function NoteEditor({ note, onDeleted }: { note: NoteRow; onDeleted: () => void }) {
   const [body, setBody] = useState(note.body);
-  const [state, setState] = useState<"saved" | "dirty" | "saving">("saved");
+  const [state, setState] = useState<"saved" | "dirty" | "saving" | "error">("saved");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latest = useRef(body);
+  const savedBody = useRef(note.body);
   latest.current = body;
 
-  // Autosave 800 ms after typing stops; flush on unmount.
-  useEffect(() => () => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-      saveNote(note.id, latest.current);
+  const flush = async () => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+    const text = latest.current;
+    if (text === savedBody.current) {
+      setState("saved");
+      return;
     }
+    setState("saving");
+    try {
+      await saveNote(note.id, text);
+      savedBody.current = text;
+      // Typing may have continued while saving; only show "Saved" if nothing is pending.
+      setState(latest.current === text ? "saved" : "dirty");
+    } catch {
+      setState("error");
+    }
+  };
+
+  // Flush on unmount and when the tab is closed or hidden.
+  useEffect(() => {
+    const onHide = () => {
+      if (latest.current !== savedBody.current) void flush();
+    };
+    window.addEventListener("beforeunload", onHide);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("beforeunload", onHide);
+      document.removeEventListener("visibilitychange", onHide);
+      onHide();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.id]);
 
   return (
@@ -383,23 +413,24 @@ function NoteEditor({ note, onDeleted }: { note: NoteRow; onDeleted: () => void 
           setBody(e.target.value);
           setState("dirty");
           clearTimeout(timer.current);
-          timer.current = setTimeout(async () => {
-            timer.current = undefined;
-            setState("saving");
-            await saveNote(note.id, latest.current);
-            setState("saved");
-          }, 800);
+          timer.current = setTimeout(flush, 800);
         }}
+        onBlur={() => void flush()}
         aria-label="Note"
       />
       <div className="flex items-center justify-between border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400 dark:border-slate-800">
-        <span>{state === "saved" ? "Saved" : state === "saving" ? "Saving…" : "Editing…"}</span>
+        {state === "error" ? (
+          <button className="font-medium text-red-600 hover:underline" onClick={() => void flush()}>Not saved — retry</button>
+        ) : (
+          <span>{state === "saved" ? "Saved" : state === "saving" ? "Saving…" : "Editing…"}</span>
+        )}
         <button
           className="hover:text-red-600"
           onClick={async () => {
             if (confirm("Delete this note?")) {
               clearTimeout(timer.current);
               timer.current = undefined;
+              savedBody.current = latest.current; // nothing left to flush
               await deleteNote(note.id);
               onDeleted();
             }
@@ -588,8 +619,8 @@ export function ItemPage() {
                   <ul className="space-y-1.5 text-sm">
                     {item.links.slice(0, 8).map((l) => (
                       <li key={l.id} className="flex items-center gap-2">
-                        <img src={`https://www.google.com/s2/favicons?domain=${l.domain}&sz=32`} alt="" className="h-4 w-4 rounded" loading="lazy" />
-                        <a href={l.url} target="_blank" rel="noreferrer" className="truncate hover:underline" dir="auto">{l.label || l.url}</a>
+                        <SiteIcon domain={l.domain} className="h-4 w-4" />
+                        <a href={safeHref(l.url)} target="_blank" rel="noreferrer" className="truncate hover:underline" dir="auto">{l.label || l.url}</a>
                       </li>
                     ))}
                     {item.links.length > 8 && <li className="text-xs text-slate-500">+{item.links.length - 8} more</li>}

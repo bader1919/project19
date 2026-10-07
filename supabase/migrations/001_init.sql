@@ -149,15 +149,39 @@ create table public.api_tokens (
 do $$
 declare t text;
 begin
-  foreach t in array array['items','video_details','links','tags','item_tags',
-                           'collections','collection_items','notes','user_settings','api_tokens']
+  foreach t in array array['items','tags','collections','user_settings','api_tokens']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format(
       'create policy %I on public.%I for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid())',
       t || '_owner', t);
   end loop;
+  -- Child rows must also point at the user's OWN parent rows, otherwise a user
+  -- who learned another user's item id could attach notes/links to it.
+  foreach t in array array['video_details','links','notes']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format(
+      'create policy %I on public.%I for all to authenticated using (user_id = auth.uid())
+         with check (user_id = auth.uid()
+           and exists (select 1 from public.items i where i.id = item_id and i.user_id = auth.uid()))',
+      t || '_owner', t);
+  end loop;
 end $$;
+
+alter table public.item_tags enable row level security;
+create policy item_tags_owner on public.item_tags for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid()
+    and exists (select 1 from public.items i where i.id = item_id and i.user_id = auth.uid())
+    and exists (select 1 from public.tags t where t.id = tag_id and t.user_id = auth.uid()));
+
+alter table public.collection_items enable row level security;
+create policy collection_items_owner on public.collection_items for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid()
+    and exists (select 1 from public.items i where i.id = item_id and i.user_id = auth.uid())
+    and exists (select 1 from public.collections c where c.id = collection_id and c.user_id = auth.uid()));
 
 -- ---------------------------------------------------------------------------
 -- Search document: everything about an item flattened into one normalised
@@ -174,22 +198,23 @@ as $$
    where jsonb_typeof(x) = 'string'
 $$;
 
+-- Runs with the caller's rights so RLS applies; capped well below the 1 MB tsvector limit.
 create or replace function public.build_search_doc(
   p_item uuid, p_title text, p_summary text, p_key_points jsonb, p_extra jsonb)
 returns text
 language sql
 stable
-security definer
 set search_path = public
 as $$
-  select public.norm_text(concat_ws(' ',
+  select left(public.norm_text(concat_ws(' ',
     p_title, p_summary, public.jsonb_strings(p_key_points), public.jsonb_strings(p_extra),
     (select string_agg(t.name, ' ') from item_tags it join tags t on t.id = it.tag_id where it.item_id = p_item),
-    (select concat_ws(' ', v.channel, v.description, public.jsonb_strings(v.description_info), public.jsonb_strings(v.mentions), v.transcript)
-       from video_details v where v.item_id = p_item),
     (select string_agg(concat_ws(' ', l.url, l.domain, l.label, l.context), ' ') from links l where l.item_id = p_item),
-    (select string_agg(n.body, ' ') from notes n where n.item_id = p_item)
-  ))
+    (select string_agg(n.body, ' ') from notes n where n.item_id = p_item),
+    (select concat_ws(' ', v.channel, v.description, public.jsonb_strings(v.description_info),
+                      public.jsonb_strings(v.mentions), left(v.transcript, 250000))
+       from video_details v where v.item_id = p_item)
+  )), 400000)
 $$;
 
 create or replace function public.items_before_write()
@@ -209,31 +234,65 @@ create trigger items_before_insert before insert on public.items
 create trigger items_before_update before update of title, summary, key_points, extra, status on public.items
   for each row execute function public.items_before_write();
 
--- Related tables refresh their item's search_doc (updates only search_doc, so
--- the column-specific items trigger above does not re-fire).
-create or replace function public.refresh_item_search()
-returns trigger
-language plpgsql
+-- Related tables refresh their items' search_doc once per statement (bulk link
+-- inserts would otherwise rebuild the whole document for every row). Only
+-- search_doc is updated, so the column-specific items trigger above does not re-fire.
+create or replace function public.refresh_items_search(p_items uuid[])
+returns void
+language sql
 security definer
 set search_path = public
 as $$
-declare v_item uuid;
-begin
-  v_item := case when tg_op = 'DELETE' then old.item_id else new.item_id end;
   update items i
      set search_doc = build_search_doc(i.id, i.title, i.summary, i.key_points, i.extra)
-   where i.id = v_item;
+   where i.id = any(p_items)
+$$;
+
+create or replace function public.refresh_search_from_new()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform refresh_items_search(array(select distinct item_id from new_rows));
   return null;
 end $$;
 
-create trigger video_details_search after insert or update or delete on public.video_details
-  for each row execute function public.refresh_item_search();
-create trigger links_search after insert or update or delete on public.links
-  for each row execute function public.refresh_item_search();
-create trigger item_tags_search after insert or delete on public.item_tags
-  for each row execute function public.refresh_item_search();
-create trigger notes_search after insert or update or delete on public.notes
-  for each row execute function public.refresh_item_search();
+create or replace function public.refresh_search_from_old()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform refresh_items_search(array(select distinct item_id from old_rows));
+  return null;
+end $$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['video_details','links','item_tags','notes']
+  loop
+    execute format('create trigger %I after insert on public.%I referencing new table as new_rows
+                    for each statement execute function public.refresh_search_from_new()', t || '_search_ins', t);
+    execute format('create trigger %I after update on public.%I referencing new table as new_rows
+                    for each statement execute function public.refresh_search_from_new()', t || '_search_upd', t);
+    execute format('create trigger %I after delete on public.%I referencing old table as old_rows
+                    for each statement execute function public.refresh_search_from_old()', t || '_search_del', t);
+  end loop;
+end $$;
+
+-- Renaming a topic changes what its items match.
+create or replace function public.refresh_search_from_tag()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform refresh_items_search(array(select it.item_id from item_tags it join new_rows n on n.id = it.tag_id));
+  return null;
+end $$;
+create trigger tags_search_upd after update on public.tags referencing new table as new_rows
+  for each statement execute function public.refresh_search_from_tag();
+
+-- Internal helpers are not part of the API.
+revoke execute on function public.refresh_items_search(uuid[]) from public, anon, authenticated;
+revoke execute on function public.refresh_search_from_new() from public, anon, authenticated;
+revoke execute on function public.refresh_search_from_old() from public, anon, authenticated;
+revoke execute on function public.refresh_search_from_tag() from public, anon, authenticated;
+revoke execute on function public.build_search_doc(uuid, text, text, jsonb, jsonb) from public, anon;
+grant execute on function public.build_search_doc(uuid, text, text, jsonb, jsonb) to authenticated, service_role;
 
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -295,7 +354,7 @@ as $$
     from p
     join public.items i on i.user_id = p.uid
     left join public.video_details v on v.item_id = i.id
-   where (p.nq is null or i.search_vector @@ p.tsq or i.search_doc like '%' || p.nq || '%')
+   where (p.nq is null or i.search_vector @@ p.tsq or i.search_doc like '%' || replace(replace(replace(p.nq, '\', '\\'), '%', '\%'), '_', '\_') || '%')
      and (p_type is null or i.type = p_type)
      and (p_status is null or i.status = p_status)
      and (p_tag is null or exists (

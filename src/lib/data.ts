@@ -224,18 +224,28 @@ export async function listLinks(p: { q?: string; domain?: string; limit?: number
 }
 
 export async function addLink(itemId: string, url: string, label?: string) {
-  const normalized = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+  let parsed: URL;
+  try {
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
+  } catch {
+    throw new Error("That doesn't look like a web link");
+  }
+  if (!/^https?:$/.test(parsed.protocol) || !parsed.hostname.includes(".")) throw new Error("Only http(s) web links can be saved");
+  const normalized = parsed.toString();
+  const existing = check(await supabase.from("links").select("id").eq("item_id", itemId).eq("url", normalized).maybeSingle());
+  if (existing) {
+    // Don't wipe the existing label/source; only set a label if one was typed.
+    if (label) check(await supabase.from("links").update({ label }).eq("id", existing.id));
+    return;
+  }
   check(
-    await supabase.from("links").upsert(
-      {
-        item_id: itemId,
-        url: normalized.toString(),
-        domain: normalized.hostname.replace(/^www\./, ""),
-        label: label || null,
-        source: "manual",
-      },
-      { onConflict: "item_id,url" },
-    ),
+    await supabase.from("links").insert({
+      item_id: itemId,
+      url: normalized,
+      domain: parsed.hostname.replace(/^www\./, ""),
+      label: label || null,
+      source: "manual",
+    }),
   );
 }
 
@@ -250,7 +260,7 @@ export async function deleteLink(id: string) {
 export async function libraryStats() {
   const [all, pending, links, notes] = await Promise.all([
     supabase.from("items").select("id", { count: "exact", head: true }),
-    supabase.from("items").select("id", { count: "exact", head: true }).is("analyzed_at", null),
+    supabase.from("items").select("id", { count: "exact", head: true }).eq("status", "fetched"),
     supabase.from("links").select("id", { count: "exact", head: true }),
     supabase.from("notes").select("id", { count: "exact", head: true }),
   ]);

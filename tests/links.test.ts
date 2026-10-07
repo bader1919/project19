@@ -6,6 +6,7 @@ import {
   extractChapters,
   parseTimestamp,
   expandShortLinks,
+  isPrivateHost,
   domainOf,
 } from "../server/links";
 import type { ExtractedLink } from "../shared/types";
@@ -240,17 +241,53 @@ describe("extractChapters", () => {
 describe("expandShortLinks", () => {
   const link = (url: string) => ({ url, domain: domainOf(url), context: "c" });
 
-  it("expands bit.ly using the final response url", async () => {
-    const fetchImpl = vi.fn(async () => ({ url: "https://www.example.com/long/page" }) as Response);
+  const redirect = (location: string) => new Response(null, { status: 301, headers: { location } });
+
+  it("expands bit.ly by following the redirect manually", async () => {
+    const fetchImpl = vi.fn(async () => redirect("https://www.example.com/long/page"));
     const [out] = await expandShortLinks([link("https://bit.ly/abc")], fetchImpl as unknown as typeof fetch);
     expect(out.url).toBe("https://www.example.com/long/page");
     expect(out.domain).toBe("example.com");
     expect((out as { original_url?: string }).original_url).toBe("https://bit.ly/abc");
     expect(out.context).toBe("c");
+    // stops once it reaches a non-shortener host: the destination itself is never contacted
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const init = (fetchImpl.mock.calls[0] as unknown[])[1] as RequestInit;
     expect(init.method).toBe("HEAD");
-    expect(init.redirect).toBe("follow");
+    expect(init.redirect).toBe("manual");
+  });
+
+  it("follows a chain of shorteners", async () => {
+    const fetchImpl = vi.fn(async (u: string) =>
+      u.startsWith("https://bit.ly") ? redirect("https://tinyurl.com/next") : redirect("https://real.example.com/"),
+    );
+    const [out] = await expandShortLinks([link("https://bit.ly/a")], fetchImpl as unknown as typeof fetch);
+    expect(out.url).toBe("https://real.example.com/");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "http://127.0.0.1:8080/admin",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://10.0.0.5/",
+    "http://localhost/",
+    "http://[::1]/",
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+  ])("refuses to follow a redirect to %s", async (target) => {
+    const fetchImpl = vi.fn(async () => redirect(target));
+    const l = link("https://bit.ly/evil");
+    const [out] = await expandShortLinks([l], fetchImpl as unknown as typeof fetch);
+    expect(out.url).toBe("https://bit.ly/evil");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after 5 hops", async () => {
+    let n = 0;
+    const fetchImpl = vi.fn(async () => redirect(`https://bit.ly/hop${++n}`));
+    const [out] = await expandShortLinks([link("https://bit.ly/start")], fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(out.url).toBe("https://bit.ly/hop5");
   });
 
   it("leaves non-shortener links untouched and does not fetch", async () => {
@@ -278,7 +315,7 @@ describe("expandShortLinks", () => {
   });
 
   it("handles a mixed list preserving order", async () => {
-    const fetchImpl = vi.fn(async () => ({ url: "https://dest.example.net/z" }) as Response);
+    const fetchImpl = vi.fn(async () => redirect("https://dest.example.net/z"));
     const out = await expandShortLinks(
       [link("https://example.com/a"), link("https://amzn.to/1"), link("https://example.org/b")],
       fetchImpl as unknown as typeof fetch,
@@ -289,4 +326,14 @@ describe("expandShortLinks", () => {
   it("returns [] for empty input", async () => {
     expect(await expandShortLinks([], vi.fn() as unknown as typeof fetch)).toEqual([]);
   });
+});
+
+describe("isPrivateHost", () => {
+  it.each(["localhost", "127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "[::1]", "fd00::1", "fe80::1", "intranet", "printer.local", "db.internal"])(
+    "%s is private",
+    (h) => expect(isPrivateHost(h)).toBe(true),
+  );
+  it.each(["example.com", "8.8.8.8", "172.32.0.1", "192.169.0.1", "github.com", "2606:4700::1111"])("%s is public", (h) =>
+    expect(isPrivateHost(h)).toBe(false),
+  );
 });
