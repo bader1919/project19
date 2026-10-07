@@ -32,9 +32,24 @@ export interface IngestResult {
   link_count: number;
 }
 
+/** Server-wide defaults (private.app_secrets, readable only with the service role). */
+async function sharedSecret(db: Db, name: string): Promise<string | null> {
+  const { data, error } = await db.rpc("app_secret", { p_name: name });
+  return error || typeof data !== "string" || !data ? null : data;
+}
+
 async function userKeys(db: Db, userId: string) {
-  const { data } = await db.from("user_settings").select("supadata_key, ytio_key").eq("user_id", userId).maybeSingle();
-  return { supadata_key: data?.supadata_key ?? null, ytio_key: data?.ytio_key ?? null };
+  const { data } = await db
+    .from("user_settings")
+    .select("supadata_key, ytio_key, gemini_key, gemini_model")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return {
+    supadata_key: data?.supadata_key ?? null,
+    ytio_key: data?.ytio_key ?? null,
+    gemini_key: data?.gemini_key || (await sharedSecret(db, "gemini_api_key")),
+    gemini_model: data?.gemini_model ?? null,
+  };
 }
 
 async function insertLinks(

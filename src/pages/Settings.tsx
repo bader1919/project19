@@ -62,7 +62,7 @@ function ConnectorCard() {
           className="btn-primary"
           onClick={async () => {
             try {
-              const r = await api<{ url: string }>("/api/token", { body: { label: "Claude connector" } });
+              const r = await api<{ url: string }>("/token", { body: { label: "Claude connector" } });
               setUrl(r.url);
               setCopied(false);
               load();
@@ -78,7 +78,7 @@ function ConnectorCard() {
             className="btn-danger"
             onClick={async () => {
               if (!confirm("Disconnect every Claude connector using RefVault? You'll need to add a new URL in Claude.")) return;
-              await api("/api/token", { method: "DELETE" });
+              await api("/token", { method: "DELETE" });
               setUrl(null);
               load();
             }}
@@ -105,17 +105,21 @@ function ConnectorCard() {
 function TranscriptKeysCard() {
   const [supadata, setSupadata] = useState("");
   const [ytio, setYtio] = useState("");
+  const [gemini, setGemini] = useState("");
+  const [geminiModel, setGeminiModel] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
       .from("user_settings")
-      .select("supadata_key, ytio_key")
+      .select("supadata_key, ytio_key, gemini_key, gemini_model")
       .maybeSingle()
       .then(({ data }) => {
         setSupadata(data?.supadata_key ?? "");
         setYtio(data?.ytio_key ?? "");
+        setGemini(data?.gemini_key ?? "");
+        setGeminiModel(data?.gemini_model ?? "");
       });
   }, []);
 
@@ -123,7 +127,7 @@ function TranscriptKeysCard() {
     <Card title="Transcript sources" icon={<KeyRound className="h-4 w-4 text-amber-500" />}>
       <p className="text-slate-600 dark:text-slate-300">
         RefVault first reads captions straight from YouTube — <strong>free, no key needed</strong>. When YouTube blocks the server or a
-        video has no captions, it falls back to these free-tier services (optional):
+        video has no captions, it falls back to these free-tier services, in this order (all optional):
       </p>
       <form
         className="space-y-3"
@@ -132,7 +136,14 @@ function TranscriptKeysCard() {
           const { data: u } = await supabase.auth.getUser();
           const { error } = await supabase
             .from("user_settings")
-            .upsert({ user_id: u.user!.id, supadata_key: supadata.trim() || null, ytio_key: ytio.trim() || null, updated_at: new Date().toISOString() });
+            .upsert({
+              user_id: u.user!.id,
+              supadata_key: supadata.trim() || null,
+              ytio_key: ytio.trim() || null,
+              gemini_key: gemini.trim() || null,
+              gemini_model: geminiModel.trim() || null,
+              updated_at: new Date().toISOString(),
+            });
           if (error) setError(error.message);
           else {
             setError(null);
@@ -141,6 +152,22 @@ function TranscriptKeysCard() {
           }
         }}
       >
+        <div>
+          <label htmlFor="gemini" className="mb-1 block font-medium">
+            Google Gemini API key <span className="font-normal text-slate-500">— free (up to 8 hours of video/day); Gemini watches the video itself, so it works even without captions</span>
+          </label>
+          <input id="gemini" type="password" autoComplete="off" className="input" value={gemini} onChange={(e) => setGemini(e.target.value)} placeholder="AIza…" />
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <a className="text-xs text-brand-600 hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Get a free key at Google AI Studio</a>
+            <input
+              className="input w-56 py-1 text-xs"
+              value={geminiModel}
+              onChange={(e) => setGeminiModel(e.target.value)}
+              placeholder="Model (default: gemini-flash-latest)"
+              aria-label="Gemini model"
+            />
+          </div>
+        </div>
         <div>
           <label htmlFor="supadata" className="mb-1 block font-medium">
             Supadata API key <span className="font-normal text-slate-500">— 100 free transcripts/month, also transcribes videos without captions</span>

@@ -33,7 +33,7 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
     setBusy(true);
     setError(null);
     try {
-      setResult(await api<IngestResult>("/api/ingest", { body: { url, transcript: transcript || undefined } }));
+      setResult(await api<IngestResult>("/ingest", { body: { url, transcript: transcript || undefined } }));
     } catch (e) {
       setError((e as Error).message);
     } finally {

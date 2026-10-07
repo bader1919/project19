@@ -315,7 +315,7 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
     setBusy(true);
     setMessage(null);
     try {
-      const r = await api<{ ok: boolean; error?: string }>("/api/ingest", { body: { item_id: item.id, transcript } });
+      const r = await api<{ ok: boolean; error?: string }>("/ingest", { body: { item_id: item.id, transcript } });
       if (r.ok) onChanged();
       else setMessage(r.error ?? "Still no transcript");
     } catch (e) {
@@ -330,7 +330,7 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
       <div className="card space-y-3 p-4 text-sm sm:p-5">
         <p>No transcript yet.{item.error && !message && <span className="block text-xs text-slate-500">{item.error}</span>}</p>
         <p className="text-xs text-slate-500">
-          Tip: add a free Supadata key in Settings — it can also transcribe videos that have no captions.
+          Tip: add a free Gemini key in Settings — Gemini watches the video itself, so it can transcribe videos YouTube blocks or that have no captions.
         </p>
         <button className="btn-outline" onClick={() => retry()} disabled={busy}>
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Try again

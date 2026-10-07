@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fromSupadata, fromYoutubeTranscriptIo, getTranscript, segmentsToText } from "../server/transcript";
+import { fromGemini, fromSupadata, fromYoutubeTranscriptIo, getTranscript, segmentsToText } from "../server/transcript";
 import type { CaptionTrack } from "../server/youtube";
 
 const ID = "dQw4w9WgXcQ";
@@ -166,5 +166,96 @@ describe("segmentsToText", () => {
   });
   it("returns empty string for no segments", () => {
     expect(segmentsToText([])).toBe("");
+  });
+});
+
+describe("fromGemini", () => {
+  const geminiReply = (text: string, status = 200) =>
+    new Response(JSON.stringify(status === 200 ? { candidates: [{ content: { parts: [{ text }] } }] } : { error: { message: text } }), { status });
+
+  it("sends the YouTube URL as file_data with the key in a header, and parses segments", async () => {
+    const fetchImpl = vi.fn(async () =>
+      geminiReply('[{"t": 12, "text": "second line"}, {"t": 0, "text": "مرحبا بكم"}, {"t": 3, "text": "  "}]'),
+    );
+    const res = await fromGemini("dQw4w9WgXcQ", "KEY", "gemini-flash-latest", fetchImpl as unknown as typeof fetch);
+    const [url, init] = (fetchImpl.mock.calls[0] as unknown[]) as [string, RequestInit];
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent");
+    expect((init.headers as Record<string, string>)["x-goog-api-key"]).toBe("KEY");
+    expect(url).not.toContain("KEY");
+    const body = JSON.parse(String(init.body));
+    expect(body.contents[0].parts[0].file_data.file_uri).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    expect(res.source).toBe("gemini");
+    expect(res.segments).toEqual([
+      { start: 0, dur: 0, text: "مرحبا بكم" },
+      { start: 12, dur: 0, text: "second line" },
+    ]);
+  });
+
+  it("accepts a JSON reply wrapped in a code fence", async () => {
+    const fetchImpl = vi.fn(async () => geminiReply('```json\n[{"t": 1, "text": "hi"}]\n```'));
+    const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
+    expect(res.segments).toEqual([{ start: 1, dur: 0, text: "hi" }]);
+    expect(res.lang).toBe("en");
+  });
+
+  it("detects Arabic", async () => {
+    const fetchImpl = vi.fn(async () => geminiReply('[{"t": 0, "text": "السلام عليكم ورحمة الله"}]'));
+    expect((await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch)).lang).toBe("ar");
+  });
+
+  it("refuses odd model names (falls back to the default)", async () => {
+    const fetchImpl = vi.fn(async () => geminiReply('[{"t": 0, "text": "x"}]'));
+    await fromGemini("dQw4w9WgXcQ", "K", "../../evil?x=", fetchImpl as unknown as typeof fetch);
+    expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain("/models/gemini-flash-latest:");
+  });
+
+  it("surfaces API errors and unreadable output", async () => {
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, (async () => geminiReply("API key not valid", 400)) as unknown as typeof fetch)).rejects.toThrow(/Gemini 400: API key not valid/);
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, (async () => geminiReply("not json")) as unknown as typeof fetch)).rejects.toThrow(/unreadable/);
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, (async () => geminiReply("[]")) as unknown as typeof fetch)).rejects.toThrow(/empty/);
+  });
+
+  it("is tried after free YouTube captions and before paid backups", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (u: string) => {
+      calls.push(new URL(u).hostname);
+      if (u.includes("generativelanguage")) return geminiReply('[{"t": 0, "text": "from gemini"}]');
+      return new Response("", { status: 500 });
+    });
+    const out = await getTranscript(
+      "dQw4w9WgXcQ",
+      [{ baseUrl: "https://www.youtube.com/api/timedtext?v=x", languageCode: "en" }],
+      { gemini_key: "G", supadata_key: "S" },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(out.result?.source).toBe("gemini");
+    expect(calls).toEqual(["www.youtube.com", "generativelanguage.googleapis.com"]);
+    expect(out.attempts.map((a) => a.source)).toEqual(["youtube"]);
+  });
+});
+
+describe("fromGemini model fallback", () => {
+  it("tries the next model on 503/429 and stops on other errors", async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (u: string) => {
+      const model = u.match(/models\/([^:]+):/)![1];
+      seen.push(model);
+      if (model === "gemini-flash-latest") return new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 });
+      if (model === "gemini-3.8-flash") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '[{"t":0,"text":"ok"}]' }] } }] }));
+    });
+    const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
+    expect(res.segments[0].text).toBe("ok");
+    expect(seen).toEqual(["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"]);
+
+    const bad = vi.fn(async () => new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 }));
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, bad as unknown as typeof fetch)).rejects.toThrow(/400/);
+    expect(bad).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the last error when every model is overloaded", async () => {
+    const busy = vi.fn(async () => new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 }));
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, busy as unknown as typeof fetch)).rejects.toThrow(/503: high demand/);
+    expect(busy).toHaveBeenCalledTimes(4);
   });
 });

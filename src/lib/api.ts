@@ -1,9 +1,16 @@
 import { supabase } from "./supabase";
 
-/** Call one of the Netlify functions with the signed-in user's session. */
+/**
+ * Where the RefVault API lives: the Supabase Edge Function in production
+ * (VITE_API_BASE=https://<project>.supabase.co/functions/v1/refvault) or the
+ * Netlify functions under /api during local development.
+ */
+const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || "/api").replace(/\/+$/, "");
+
+/** Call the RefVault API ("/ingest", "/token") with the signed-in user's session. */
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const { data } = await supabase.auth.getSession();
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: init.method ?? "POST",
     headers: {
       "Content-Type": "application/json",

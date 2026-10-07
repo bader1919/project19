@@ -17,7 +17,7 @@ fi
 $P -c "drop database if exists $DB" -c "create database $DB"
 $P -d $DB -f "$ROOT/tests/sql/supabase_stub.sql"
 $P -d $DB -f "$ROOT/tests/e2e/setup-db.sql"
-$P -d $DB -f "$ROOT/supabase/migrations/001_init.sql"
+for m in "$ROOT"/supabase/migrations/*.sql; do $P -d $DB -f "$m"; done
 $P -d $DB -f "$ROOT/tests/e2e/grants.sql"
 
 SECRET=$(node -e 'import("'"$ROOT"'/tests/e2e/jwt.mjs").then(m=>console.log(m.JWT_SECRET))')

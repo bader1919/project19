@@ -13,7 +13,12 @@ export interface TranscriptResult {
 export interface TranscriptKeys {
   supadata_key?: string | null;
   ytio_key?: string | null;
+  gemini_key?: string | null;
+  gemini_model?: string | null;
 }
+
+export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
+export const GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
 
 export interface TranscriptAttempt {
   source: string;
@@ -113,6 +118,74 @@ export async function fromYoutubeTranscriptIo(id: string, apiKey: string, fetchI
   return { segments, lang: track?.language ?? null, source: "youtube-transcript.io" };
 }
 
+const GEMINI_PROMPT = `Transcribe the speech in this video verbatim, in the language actually spoken (do not translate; keep Arabic in Arabic script).
+Return ONLY a JSON array of segments in time order, one per sentence or short phrase:
+[{"t": <start time in whole seconds>, "text": "<what was said>"}]
+Also transcribe any URLs that are spoken or shown on screen exactly as they appear.`;
+
+interface GeminiResponse {
+  candidates?: { content?: { parts?: { text?: string }[] } }[];
+  error?: { message?: string };
+}
+
+/**
+ * Google Gemini (free tier: up to 8 hours of YouTube video per day). Gemini watches the
+ * YouTube URL itself, so this works even when YouTube blocks caption downloads or the
+ * video has no captions at all.
+ */
+export async function fromGemini(
+  id: string,
+  apiKey: string,
+  model: string = DEFAULT_GEMINI_MODEL,
+  fetchImpl: Fetch = fetch,
+  timeoutMs = 120_000,
+): Promise<TranscriptResult> {
+  const first = /^[a-z0-9.\-]+$/i.test(model) ? model : DEFAULT_GEMINI_MODEL;
+  // Free-tier models are sometimes overloaded (503) or rate-limited (429): try siblings.
+  const models = [...new Set([first, ...GEMINI_FALLBACK_MODELS])];
+  let lastError = "";
+  for (const m of models) {
+    const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ file_data: { file_uri: youtubeWatchUrl(id) } }, { text: GEMINI_PROMPT }] }],
+        generationConfig: { temperature: 0, responseMimeType: "application/json" },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const body = (await res.json().catch(() => ({}))) as GeminiResponse;
+    if (!res.ok) {
+      lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
+      // Overloaded, rate-limited, or retired for this key: try the next model.
+      if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
+      throw new Error(lastError);
+    }
+    return parseGeminiTranscript(body);
+  }
+  throw new Error(lastError || "Gemini is unavailable");
+}
+
+function parseGeminiTranscript(body: GeminiResponse): TranscriptResult {
+  const raw = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+  } catch {
+    throw new Error("Gemini returned an unreadable transcript");
+  }
+  const rows = Array.isArray(parsed) ? parsed : [];
+  const segments = rows
+    .map((r) => r as { t?: unknown; text?: unknown })
+    .filter((r) => typeof r.text === "string" && r.text.trim())
+    .map((r) => ({ start: Math.max(0, Number(r.t) || 0), dur: 0, text: String(r.text).trim() }))
+    .sort((a, b) => a.start - b.start);
+  if (!segments.length) throw new Error("Gemini returned an empty transcript");
+  const sample = segments.slice(0, 20).map((s) => s.text).join(" ");
+  const lang = (sample.match(/[\u0600-\u06FF]/g) ?? []).length > (sample.match(/[A-Za-z]/g) ?? []).length ? "ar" : "en";
+  return { segments, lang, source: "gemini" };
+}
+
 /** Try every configured source, free ones first. Returns null plus the reasons when all fail. */
 export async function getTranscript(
   id: string,
@@ -125,6 +198,9 @@ export async function getTranscript(
   const attempts: TranscriptAttempt[] = [];
   const sources: [string, () => Promise<TranscriptResult>][] = [];
   if (tracks.length) sources.push(["youtube", () => fromYouTube(tracks, fetchImpl)]);
+  if (keys.gemini_key) {
+    sources.push(["gemini", () => fromGemini(id, keys.gemini_key!, keys.gemini_model || DEFAULT_GEMINI_MODEL, fetchImpl)]);
+  }
   if (keys.supadata_key) sources.push(["supadata", () => fromSupadata(id, keys.supadata_key!, fetchImpl)]);
   if (keys.ytio_key) sources.push(["youtube-transcript.io", () => fromYoutubeTranscriptIo(id, keys.ytio_key!, fetchImpl)]);
 
