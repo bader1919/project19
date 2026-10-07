@@ -22,8 +22,10 @@ export async function userFromRequest(db: Db, req: Request): Promise<string> {
   if (!jwt) throw new HttpError(401, "Not signed in");
   const { data, error } = await db.auth.getUser(jwt);
   if (error || !data.user) throw new HttpError(401, "Session expired — sign in again");
-  // Optional lock-down for a public deployment: ALLOWED_EMAILS="me@example.com,other@example.com"
-  const allowed = (env("ALLOWED_EMAILS") ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  // Lock-down for a public deployment: ALLOWED_EMAILS env var, or the 'allowed_emails'
+  // server secret ("me@example.com,other@example.com"). Empty = anyone who can sign in.
+  const list = env("ALLOWED_EMAILS") ?? (await db.rpc("app_secret", { p_name: "allowed_emails" })).data ?? "";
+  const allowed = String(list).split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
   if (allowed.length && !allowed.includes((data.user.email ?? "").toLowerCase())) {
     throw new HttpError(403, "This account is not allowed to use this RefVault");
   }

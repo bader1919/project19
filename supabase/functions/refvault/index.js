@@ -54,7 +54,8 @@ async function userFromRequest(db, req) {
   if (!jwt) throw new HttpError(401, "Not signed in");
   const { data, error } = await db.auth.getUser(jwt);
   if (error || !data.user) throw new HttpError(401, "Session expired \u2014 sign in again");
-  const allowed = (env("ALLOWED_EMAILS") ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const list2 = env("ALLOWED_EMAILS") ?? (await db.rpc("app_secret", { p_name: "allowed_emails" })).data ?? "";
+  const allowed = String(list2).split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
   if (allowed.length && !allowed.includes((data.user.email ?? "").toLowerCase())) {
     throw new HttpError(403, "This account is not allowed to use this RefVault");
   }

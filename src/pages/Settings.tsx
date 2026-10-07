@@ -189,6 +189,36 @@ function TranscriptKeysCard() {
   );
 }
 
+function ChangePassword() {
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const { error } = await supabase.auth.updateUser({ password });
+        setMessage(error ? error.message : "Password changed.");
+        if (!error) setPassword("");
+      }}
+    >
+      <input
+        type="password"
+        minLength={8}
+        required
+        autoComplete="new-password"
+        className="input w-64"
+        placeholder="New password (8+ characters)"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        aria-label="New password"
+      />
+      <button className="btn-outline">Change password</button>
+      {message && <span className="text-xs text-slate-500">{message}</span>}
+    </form>
+  );
+}
+
 export function Settings() {
   const { session } = useSession();
   const [busy, setBusy] = useState<string | null>(null);
@@ -222,6 +252,7 @@ export function Settings() {
         </Card>
         <Card title="Account" icon={<LogOut className="h-4 w-4 text-slate-500" />}>
           <p>Signed in as <strong>{session?.user.email}</strong></p>
+          <ChangePassword />
           <button className="btn-outline" onClick={() => supabase.auth.signOut()}>
             <LogOut className="h-4 w-4" /> Sign out
           </button>
