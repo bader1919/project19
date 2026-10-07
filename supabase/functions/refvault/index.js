@@ -440,7 +440,7 @@ async function downloadCaptionTrack(track, fetchImpl = fetch) {
 
 // server/transcript.ts
 var DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
-var GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
+var GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.5-flash"];
 async function fromYouTube(tracks, fetchImpl = fetch) {
   const track = pickCaptionTrack(tracks);
   if (!track) throw new Error("no captions available");

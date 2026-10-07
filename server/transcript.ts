@@ -18,7 +18,8 @@ export interface TranscriptKeys {
 }
 
 export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
-export const GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
+// Gemma models cannot take video input, so they are not used here.
+export const GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.5-flash"];
 
 export interface TranscriptAttempt {
   source: string;
