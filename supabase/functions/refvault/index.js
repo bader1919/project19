@@ -440,24 +440,43 @@ async function downloadCaptionTrack(track, fetchImpl = fetch) {
 }
 
 // server/transcript.ts
-var DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
-var GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.5-flash"];
+var DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest";
+var GEMINI_FALLBACK_MODELS = [
+  "gemini-flash-latest",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash"
+];
 async function fromYouTube(tracks, fetchImpl = fetch) {
   const track = pickCaptionTrack(tracks);
   if (!track) throw new Error("no captions available");
   const segments = await downloadCaptionTrack(track, fetchImpl);
   if (!segments.length) throw new Error("caption track was empty");
-  return { segments, lang: track.languageCode || null, source: track.kind === "asr" ? "youtube-auto" : "youtube" };
+  return {
+    segments,
+    lang: track.languageCode || null,
+    source: track.kind === "asr" ? "youtube-auto" : "youtube"
+  };
 }
 function supadataSegments(body) {
   if (!Array.isArray(body.content)) return null;
-  const segments = body.content.filter((c) => c.text?.trim()).map((c) => ({ start: c.offset / 1e3, dur: c.duration / 1e3, text: c.text.trim() }));
-  return { segments, lang: body.lang ?? body.content[0]?.lang ?? null, source: "supadata" };
+  const segments = body.content.filter((c) => c.text?.trim()).map((c) => ({
+    start: c.offset / 1e3,
+    dur: c.duration / 1e3,
+    text: c.text.trim()
+  }));
+  return {
+    segments,
+    lang: body.lang ?? body.content[0]?.lang ?? null,
+    source: "supadata"
+  };
 }
 async function fromSupadata(id, apiKey, fetchImpl = fetch, pollMs = 2e3, maxPolls = 3) {
   const headers = { "x-api-key": apiKey };
   const url = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(youtubeWatchUrl(id))}&text=false&mode=auto`;
-  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(1e4) });
+  const res = await fetchImpl(url, {
+    headers,
+    signal: AbortSignal.timeout(1e4)
+  });
   const body = await res.json().catch(() => ({}));
   if (!res.ok && res.status !== 202) {
     const msg = typeof body.error === "string" ? body.error : body.error?.message;
@@ -468,51 +487,100 @@ async function fromSupadata(id, apiKey, fetchImpl = fetch, pollMs = 2e3, maxPoll
   if (!body.jobId) throw new Error("Supadata returned no transcript");
   for (let i = 0; i < maxPolls; i++) {
     await new Promise((r) => setTimeout(r, pollMs));
-    const jr = await fetchImpl(`https://api.supadata.ai/v1/transcript/${body.jobId}`, { headers, signal: AbortSignal.timeout(5e3) });
+    const jr = await fetchImpl(
+      `https://api.supadata.ai/v1/transcript/${body.jobId}`,
+      { headers, signal: AbortSignal.timeout(5e3) }
+    );
     const job = await jr.json().catch(() => ({}));
-    if (job.status === "failed") throw new Error(`Supadata job failed: ${JSON.stringify(job.error ?? "")}`);
+    if (job.status === "failed")
+      throw new Error(
+        `Supadata job failed: ${JSON.stringify(job.error ?? "")}`
+      );
     const done = supadataSegments(job);
     if (done) return done;
   }
-  throw new Error("Supadata is still processing this video \u2014 press retry in a minute");
+  throw new Error(
+    "Supadata is still processing this video \u2014 press retry in a minute"
+  );
 }
 async function fromYoutubeTranscriptIo(id, apiKey, fetchImpl = fetch) {
-  const res = await fetchImpl("https://www.youtube-transcript.io/api/transcripts", {
-    method: "POST",
-    headers: { Authorization: `Basic ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [id] }),
-    signal: AbortSignal.timeout(8e3)
-  });
+  const res = await fetchImpl(
+    "https://www.youtube-transcript.io/api/transcripts",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ ids: [id] }),
+      signal: AbortSignal.timeout(8e3)
+    }
+  );
   if (!res.ok) throw new Error(`youtube-transcript.io ${res.status}`);
   const data = await res.json();
   const tracks = data?.[0]?.tracks ?? [];
   const track = tracks.find((t) => /arab|^ar/i.test(t.language ?? "")) ?? tracks.find((t) => /engl|^en/i.test(t.language ?? "")) ?? tracks[0];
-  const segments = (track?.transcript ?? []).filter((s) => s.text?.trim()).map((s) => ({ start: Number(s.start), dur: Number(s.dur), text: s.text.trim() }));
-  if (!segments.length) throw new Error("youtube-transcript.io returned no transcript");
-  return { segments, lang: track?.language ?? null, source: "youtube-transcript.io" };
+  const segments = (track?.transcript ?? []).filter((s) => s.text?.trim()).map((s) => ({
+    start: Number(s.start),
+    dur: Number(s.dur),
+    text: s.text.trim()
+  }));
+  if (!segments.length)
+    throw new Error("youtube-transcript.io returned no transcript");
+  return {
+    segments,
+    lang: track?.language ?? null,
+    source: "youtube-transcript.io"
+  };
 }
 var GEMINI_PROMPT = `Transcribe the speech in this video verbatim, in the language actually spoken (do not translate; keep Arabic in Arabic script).
 Return ONLY a JSON array of segments in time order, one per sentence or short phrase:
 [{"t": <start time in whole seconds>, "text": "<what was said>"}]
 Also transcribe any URLs that are spoken or shown on screen exactly as they appear.`;
-async function fromGemini(id, apiKey, model = DEFAULT_GEMINI_MODEL, fetchImpl = fetch, timeoutMs = 12e4) {
+async function fromGemini(id, apiKey, model = DEFAULT_GEMINI_MODEL, fetchImpl = fetch, timeoutMs = 11e4, perModelMs = 4e4) {
+  const stopAt = Date.now() + timeoutMs;
   const first = /^[a-z0-9.\-]+$/i.test(model) ? model : DEFAULT_GEMINI_MODEL;
   const models = [.../* @__PURE__ */ new Set([first, ...GEMINI_FALLBACK_MODELS])];
   let lastError = "";
   for (const m of models) {
-    const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ file_data: { file_uri: youtubeWatchUrl(id) } }, { text: GEMINI_PROMPT }] }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json" }
-      }),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+    const left = stopAt - Date.now();
+    if (left < 5e3) break;
+    let res;
+    try {
+      res = await fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { file_data: { file_uri: youtubeWatchUrl(id) } },
+                  { text: GEMINI_PROMPT }
+                ]
+              }
+            ],
+            generationConfig: {
+              temperature: 0,
+              responseMimeType: "application/json"
+            }
+          }),
+          signal: AbortSignal.timeout(Math.min(perModelMs, left))
+        }
+      );
+    } catch (e) {
+      lastError = `${m}: ${e.message}`;
+      continue;
+    }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
-      if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
+      if (res.status === 429 || res.status === 404 || res.status >= 500)
+        continue;
       throw new Error(lastError);
     }
     try {
@@ -540,9 +608,14 @@ function parseGeminiTranscript(body) {
     } catch {
     }
   }
-  if (parsed === void 0 || parsed === null) throw new Error("Gemini returned an unreadable transcript");
+  if (parsed === void 0 || parsed === null)
+    throw new Error("Gemini returned an unreadable transcript");
   const rows = Array.isArray(parsed) ? parsed : Object.values(parsed).find(Array.isArray) ?? [];
-  const segments = rows.map((r) => r).filter((r) => typeof r.text === "string" && r.text.trim()).map((r) => ({ start: Math.max(0, Number(r.t ?? r.start) || 0), dur: 0, text: String(r.text).trim() })).sort((a, b) => a.start - b.start);
+  const segments = rows.map((r) => r).filter((r) => typeof r.text === "string" && r.text.trim()).map((r) => ({
+    start: Math.max(0, Number(r.t ?? r.start) || 0),
+    dur: 0,
+    text: String(r.text).trim()
+  })).sort((a, b) => a.start - b.start);
   if (!segments.length) throw new Error("Gemini returned an empty transcript");
   const sample = segments.slice(0, 20).map((s) => s.text).join(" ");
   const lang = (sample.match(/[\u0600-\u06FF]/g) ?? []).length > (sample.match(/[A-Za-z]/g) ?? []).length ? "ar" : "en";
@@ -551,12 +624,29 @@ function parseGeminiTranscript(body) {
 async function getTranscript(id, tracks, keys, fetchImpl = fetch, deadline = Date.now() + 18e3) {
   const attempts = [];
   const sources = [];
-  if (tracks.length) sources.push(["youtube", () => fromYouTube(tracks, fetchImpl)]);
+  if (tracks.length)
+    sources.push(["youtube", () => fromYouTube(tracks, fetchImpl)]);
   if (keys.gemini_key) {
-    sources.push(["gemini", () => fromGemini(id, keys.gemini_key, keys.gemini_model || DEFAULT_GEMINI_MODEL, fetchImpl)]);
+    sources.push([
+      "gemini",
+      () => fromGemini(
+        id,
+        keys.gemini_key,
+        keys.gemini_model || DEFAULT_GEMINI_MODEL,
+        fetchImpl
+      )
+    ]);
   }
-  if (keys.supadata_key) sources.push(["supadata", () => fromSupadata(id, keys.supadata_key, fetchImpl)]);
-  if (keys.ytio_key) sources.push(["youtube-transcript.io", () => fromYoutubeTranscriptIo(id, keys.ytio_key, fetchImpl)]);
+  if (keys.supadata_key)
+    sources.push([
+      "supadata",
+      () => fromSupadata(id, keys.supadata_key, fetchImpl)
+    ]);
+  if (keys.ytio_key)
+    sources.push([
+      "youtube-transcript.io",
+      () => fromYoutubeTranscriptIo(id, keys.ytio_key, fetchImpl)
+    ]);
   for (const [source, run] of sources) {
     if (Date.now() > deadline) {
       attempts.push({ source, error: "skipped (out of time) \u2014 press retry" });

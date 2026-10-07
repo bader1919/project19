@@ -206,7 +206,7 @@ describe("fromGemini", () => {
   it("refuses odd model names (falls back to the default)", async () => {
     const fetchImpl = vi.fn(async () => geminiReply('[{"t": 0, "text": "x"}]'));
     await fromGemini("dQw4w9WgXcQ", "K", "../../evil?x=", fetchImpl as unknown as typeof fetch);
-    expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain("/models/gemini-flash-latest:");
+    expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain("/models/gemini-flash-lite-latest:");
   });
 
   it("surfaces API errors and unreadable output", async () => {
@@ -240,13 +240,13 @@ describe("fromGemini model fallback", () => {
     const fetchImpl = vi.fn(async (u: string) => {
       const model = u.match(/models\/([^:]+):/)![1];
       seen.push(model);
-      if (model === "gemini-flash-latest") return new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 });
-      if (model === "gemini-flash-lite-latest") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+      if (model === "gemini-flash-lite-latest") return new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 });
+      if (model === "gemini-flash-latest") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '[{"t":0,"text":"ok"}]' }] } }] }));
     });
     const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
     expect(res.segments[0].text).toBe("ok");
-    expect(seen).toEqual(["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.8-flash"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash"]);
 
     const bad = vi.fn(async () => new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 }));
     await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, bad as unknown as typeof fetch)).rejects.toThrow(/400/);
@@ -280,11 +280,26 @@ describe("parseGeminiTranscript", () => {
     const fetchImpl = async (u: string) => {
       const m = u.match(/models\/([^:]+):/)![1];
       seen.push(m);
-      const text = m === "gemini-flash-latest" ? "sorry, no JSON here" : '[{"t":0,"text":"ok"}]';
+      const text = m === "gemini-flash-lite-latest" ? "sorry, no JSON here" : '[{"t":0,"text":"ok"}]';
       return new Response(JSON.stringify(reply([{ text }])));
     };
     const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
     expect(res.segments[0].text).toBe("ok");
-    expect(seen).toEqual(["gemini-flash-latest", "gemini-flash-lite-latest"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest"]);
+  });
+
+  it("moves on when a model hangs past its time slice", async () => {
+    const seen: string[] = [];
+    const fetchImpl = (u: string, init: RequestInit) => {
+      const m = u.match(/models\/([^:]+):/)![1];
+      seen.push(m);
+      if (m === "gemini-flash-lite-latest") {
+        return new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(new Error("Signal timed out."))));
+      }
+      return Promise.resolve(new Response(JSON.stringify(reply([{ text: '[{"t":0,"text":"ok"}]' }]))));
+    };
+    const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch, 60_000, 50);
+    expect(res.segments[0].text).toBe("ok");
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest"]);
   });
 });
