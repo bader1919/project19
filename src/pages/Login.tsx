@@ -9,7 +9,7 @@ export function Login() {
   const [busy, setBusy] = useState(false);
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <main className="flex min-h-screen items-center justify-center p-4">
       <div className="card w-full max-w-sm p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/icon.svg" alt="" className="h-10 w-10" />
@@ -44,7 +44,7 @@ export function Login() {
           </form>
         )}
       </div>
-    </div>
+    </main>
   );
 }
 

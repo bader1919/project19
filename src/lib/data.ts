@@ -97,7 +97,10 @@ export async function searchItems(p: {
   ) as SearchRow[];
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function loadItem(id: string): Promise<ItemFull | null> {
+  if (!UUID_RE.test(id)) return null;
   const item = check(
     await supabase
       .from("items")

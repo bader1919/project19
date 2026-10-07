@@ -1,5 +1,6 @@
 import { youtubeWatchUrl } from "../shared/youtube-url";
 import type { TranscriptSegment } from "../shared/types";
+import { HttpError } from "./auth";
 
 type Fetch = typeof fetch;
 
@@ -116,7 +117,14 @@ async function oembedMeta(id: string, fetchImpl: Fetch): Promise<VideoMeta> {
     `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(youtubeWatchUrl(id))}`,
     { signal: AbortSignal.timeout(4000) },
   );
-  if (!res.ok) throw new Error(`YouTube oEmbed returned ${res.status} (video private or removed?)`);
+  if (!res.ok) {
+    throw new HttpError(
+      res.status === 404 || res.status === 401 || res.status === 403 ? 404 : 502,
+      res.status === 404 || res.status === 401 || res.status === 403
+        ? "YouTube says this video is private, removed or doesn't exist"
+        : `YouTube didn't respond properly (${res.status}) — try again in a minute`,
+    );
+  }
   const o = (await res.json()) as { title?: string; author_name?: string; author_url?: string; thumbnail_url?: string };
   return {
     youtube_id: id,

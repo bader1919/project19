@@ -323,7 +323,15 @@ describe("fetchVideo", () => {
 
   it("(b4) oEmbed failing too rejects with a helpful error", async () => {
     const fetchImpl = vi.fn(async () => new Response("", { status: 404 }));
-    await expect(fetchVideo(ID, fetchImpl as unknown as typeof fetch)).rejects.toThrow(/404/);
+    await expect(fetchVideo(ID, fetchImpl as unknown as typeof fetch)).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringMatching(/private, removed or doesn't exist/),
+    });
+  });
+
+  it("(b5) oEmbed server error maps to 502", async () => {
+    const fetchImpl = vi.fn(async () => new Response("", { status: 503 }));
+    await expect(fetchVideo(ID, fetchImpl as unknown as typeof fetch)).rejects.toMatchObject({ status: 502 });
   });
 
   it("(c) player API fails -> falls back to the page's captionTracks", async () => {

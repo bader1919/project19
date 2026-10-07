@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
 import "./index.css";
 import { isConfigured } from "./lib/supabase";
 import { SessionProvider, useSession } from "./lib/auth";
@@ -17,6 +17,15 @@ import { Notes } from "./pages/Notes";
 import { Settings } from "./pages/Settings";
 import { MODULES } from "./modules/registry";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+
+function NotFound() {
+  return (
+    <div className="card p-8 text-center">
+      <h1 className="text-lg font-semibold">Page not found</h1>
+      <Link to="/" className="mt-2 inline-block text-sm text-brand-600 hover:underline">Go to Home</Link>
+    </div>
+  );
+}
 
 function App() {
   const { session, loading } = useSession();
@@ -39,7 +48,7 @@ function App() {
         <Route path="collections" element={<Collections />} />
         <Route path="notes" element={<Notes />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   );

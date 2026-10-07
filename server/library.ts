@@ -80,13 +80,41 @@ async function resolveTranscript(
   fetchImpl: Fetch,
 ): Promise<TranscriptOutcome> {
   if (manualTranscript?.trim()) {
-    return { segments: [], text: manualTranscript.trim().slice(0, MAX_TRANSCRIPT_CHARS), lang: null, source: "manual", attempts: [] };
+    const segments = parsePastedTranscript(manualTranscript);
+    const text = (segments.length ? segmentsToText(segments) : manualTranscript.trim()).slice(0, MAX_TRANSCRIPT_CHARS);
+    return { segments, text, lang: guessLang(text), source: "manual", attempts: [] };
   }
   const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
   const attempts = video.captionsError ? [{ source: "youtube", error: video.captionsError }, ...t.attempts] : t.attempts;
   if (!t.result) return { segments: [], text: null, lang: null, source: null, attempts };
   const text = segmentsToText(t.result.segments).slice(0, MAX_TRANSCRIPT_CHARS);
   return { segments: t.result.segments, text, lang: t.result.lang, source: t.result.source, attempts };
+}
+
+/**
+ * Pasted transcripts often come from YouTube's "Show transcript" panel:
+ * "0:00\ntext" or "0:00 text" per line. Keep those timestamps so lines stay clickable.
+ */
+export function parsePastedTranscript(raw: string): TranscriptSegment[] {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const TS = /^((?:\d{1,2}:)?\d{1,2}:\d{2})(?:\s+(.*))?$/;
+  const stamped = lines.filter((l) => TS.test(l)).length;
+  if (stamped < 2 || stamped < lines.length * 0.3) return [];
+  const segs: TranscriptSegment[] = [];
+  for (const line of lines) {
+    const m = line.match(TS);
+    if (m) segs.push({ start: m[1].split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0), dur: 0, text: m[2] ?? "" });
+    else if (segs.length) segs[segs.length - 1].text = `${segs[segs.length - 1].text} ${line}`.trim();
+  }
+  return segs.filter((s) => s.text);
+}
+
+function guessLang(text: string): string | null {
+  const sample = text.slice(0, 2000);
+  const arabic = (sample.match(/[\u0600-\u06FF]/g) ?? []).length;
+  const latin = (sample.match(/[A-Za-z]/g) ?? []).length;
+  if (!arabic && !latin) return null;
+  return arabic > latin ? "ar" : "en";
 }
 
 const describeAttempts = (attempts: TranscriptAttempt[]) =>
@@ -198,7 +226,10 @@ function dedupeByUrl<T extends { url: string }>(links: T[]): T[] {
   return links.filter((l) => !seen.has(l.url) && (seen.add(l.url), true));
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function ownedItem(db: Db, userId: string, itemId: string) {
+  if (!UUID_RE.test(itemId)) throw new HttpError(404, `No item ${itemId} in your library`);
   const { data } = await db.from("items").select("id, type, status").eq("id", itemId).eq("user_id", userId).maybeSingle();
   if (!data) throw new HttpError(404, `No item ${itemId} in your library`);
   return data;
@@ -295,10 +326,14 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput)
     ok(await db.from("video_details").update(update).eq("item_id", item.id), "save details");
   }
 
+  let labelled = 0;
+  const unmatched: string[] = [];
   for (const l of a.link_labels) {
     const patchLink: Record<string, unknown> = { label: l.label };
     if (l.context) patchLink.context = l.context;
-    await db.from("links").update(patchLink).eq("item_id", item.id).eq("user_id", userId).eq("url", l.url);
+    const { data } = await db.from("links").update(patchLink).eq("item_id", item.id).eq("user_id", userId).eq("url", l.url).select("id");
+    if (data?.length) labelled++;
+    else unmatched.push(l.url);
   }
   if (a.extra_links.length) {
     await insertLinks(
@@ -317,7 +352,14 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput)
   }
 
   if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
-  return { ok: true, item_id: item.id, topics: a.topics, links_labelled: a.link_labels.length, links_added: a.extra_links.length };
+  return {
+    ok: true,
+    item_id: item.id,
+    topics: a.topics,
+    links_labelled: labelled,
+    ...(unmatched.length ? { unmatched_link_labels: unmatched, hint: "Use the exact url values returned by add_video/get_item." } : {}),
+    links_added: a.extra_links.length,
+  };
 }
 
 async function ensureTags(db: Db, userId: string, names: string[]): Promise<{ id: string; name: string }[]> {
@@ -343,7 +385,12 @@ export async function setTopics(db: Db, userId: string, itemId: string, topics: 
     const keep = tags.map((t) => t.id);
     let del = db.from("item_tags").delete().eq("item_id", itemId);
     if (keep.length) del = del.not("tag_id", "in", `(${keep.join(",")})`);
-    ok(await del, "update topics");
+    const removed = (await del.select("tag_id")).data ?? [];
+    // Topics that no longer have any item disappear instead of cluttering the list.
+    for (const { tag_id } of removed) {
+      const { count } = await db.from("item_tags").select("item_id", { count: "exact", head: true }).eq("tag_id", tag_id);
+      if (!count) await db.from("tags").delete().eq("id", tag_id).eq("user_id", userId);
+    }
   }
   if (tags.length) {
     ok(
@@ -357,6 +404,7 @@ export async function setTopics(db: Db, userId: string, itemId: string, topics: 
 }
 
 export async function getItem(db: Db, userId: string, itemId: string, opts: { includeTranscript?: boolean } = {}) {
+  if (!UUID_RE.test(itemId)) throw new HttpError(404, `No item ${itemId} in your library`);
   const { data: item, error } = await db
     .from("items")
     .select("id, type, title, source_url, summary, key_points, status, error, created_at, analyzed_at")
@@ -403,7 +451,8 @@ export async function getTranscriptPage(db: Db, userId: string, itemId: string, 
     ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n")
     : (vd.transcript ?? "");
   const pages = Math.max(1, Math.ceil(full.length / TRANSCRIPT_PAGE));
-  const p = Math.min(Math.max(1, Math.floor(page) || 1), pages);
+  const p = Math.max(1, Math.floor(page) || 1);
+  if (p > pages) throw new HttpError(400, `Page ${p} does not exist — this transcript has ${pages} page(s)`);
   return {
     item_id: itemId,
     language: vd.transcript_lang,
@@ -438,7 +487,8 @@ export async function listLinks(db: Db, userId: string, args: { query?: string; 
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(clampInt(args.limit, 1, 200, 50));
-  if (args.domain) q = q.ilike("domain", `%${args.domain}%`);
+  const domain = args.domain?.trim().replace(/^[a-z]+:\/\//i, "").replace(/^www\./i, "").split(/[/?#]/)[0];
+  if (domain) q = q.ilike("domain", `%${domain.replace(/[%_\\]/g, "\\$&")}%`);
   if (args.query) {
     const s = args.query.replace(/[%,()]/g, " ");
     q = q.or(`url.ilike.%${s}%,label.ilike.%${s}%,context.ilike.%${s}%`);

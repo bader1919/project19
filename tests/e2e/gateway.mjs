@@ -39,7 +39,8 @@ http
     });
     const out = { ...CORS };
     upstream.headers.forEach((v, k) => {
-      if (!["content-encoding", "transfer-encoding", "connection"].includes(k)) out[k] = v;
+      if (["content-encoding", "transfer-encoding", "connection"].includes(k) || k.startsWith("access-control-")) return;
+      out[k] = v;
     });
     res.writeHead(upstream.status, out).end(Buffer.from(await upstream.arrayBuffer()));
   })

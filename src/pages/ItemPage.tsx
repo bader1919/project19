@@ -48,13 +48,17 @@ function Linkified({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s<>"']+)/g);
   return (
     <>
-      {parts.map((p, i) =>
-        /^https?:\/\//.test(p) ? (
-          <a key={i} href={p} target="_blank" rel="noreferrer" className="break-all text-brand-600 hover:underline">{p}</a>
-        ) : (
-          <span key={i}>{p}</span>
-        ),
-      )}
+      {parts.map((p, i) => {
+        if (!/^https?:\/\//.test(p)) return <span key={i}>{p}</span>;
+        // Punctuation right after a URL ("…/page.", "ollama.com،") belongs to the sentence.
+        const url = p.replace(/[.,;:!?'"»)\]}>،؛؟…]+$/, "");
+        return (
+          <span key={i}>
+            <a href={url} target="_blank" rel="noreferrer" className="break-all text-brand-600 hover:underline">{url}</a>
+            {p.slice(url.length)}
+          </span>
+        );
+      })}
     </>
   );
 }
@@ -209,7 +213,7 @@ function LinkRowView({ link, onSeek, onChanged }: { link: LinkRow; onSeek: (s: n
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(link.label ?? "");
   return (
-    <li className="group flex items-start gap-3 py-3">
+    <li className="group flex flex-wrap items-start gap-x-3 gap-y-1 py-3 sm:flex-nowrap">
       <SiteIcon domain={link.domain} className="mt-0.5 h-5 w-5" />
       <div className="min-w-0 flex-1">
         {editing ? (
@@ -231,7 +235,7 @@ function LinkRowView({ link, onSeek, onChanged }: { link: LinkRow; onSeek: (s: n
         <a href={safeHref(link.url)} target="_blank" rel="noreferrer" className="block truncate text-sm text-brand-600 hover:underline">{link.url}</a>
         {link.context && <p dir="auto" className="mt-0.5 line-clamp-2 text-xs text-slate-500">{link.context}</p>}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="ml-8 flex shrink-0 items-center gap-1 sm:ml-0">
         <TimeButton sec={link.timestamp_sec} onSeek={onSeek} />
         <span className="chip hidden sm:inline-flex">{link.source}</span>
         <CopyButton text={link.url} label="Copy link" />
@@ -318,7 +322,7 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
   if (!item.video?.transcript) {
     return (
       <div className="card space-y-3 p-4 text-sm sm:p-5">
-        <p>No transcript yet.{item.error && <span className="block text-xs text-slate-500">{item.error}</span>}</p>
+        <p>No transcript yet.{item.error && !message && <span className="block text-xs text-slate-500">{item.error}</span>}</p>
         <p className="text-xs text-slate-500">
           Tip: add a free Supadata key in Settings — it can also transcribe videos that have no captions.
         </p>
@@ -590,14 +594,14 @@ export function ItemPage() {
             </div>
           </div>
 
-          <div className="flex gap-1 border-b border-slate-200 dark:border-slate-800" role="tablist">
+          <div className="-mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1 dark:border-slate-800" role="tablist">
             {tabs.map((t) => (
               <button
                 key={t.id}
                 role="tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
+                className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-2.5 py-2 text-sm font-medium transition sm:px-3 ${
                   tab === t.id ? "border-brand-500 text-brand-600 dark:text-brand-100" : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
                 }`}
               >

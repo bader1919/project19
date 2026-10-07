@@ -25,7 +25,7 @@ export function ItemCard({ item, showSnippet }: { item: SearchRow; showSnippet?:
           {item.title}
         </h3>
         <p className="text-xs text-slate-500">
-          {item.channel && <span dir="auto">{item.channel} · </span>}
+          {item.channel && <><bdi>{item.channel}</bdi>{" · "}</>}
           {timeAgo(item.created_at)}
         </p>
         {text && (
