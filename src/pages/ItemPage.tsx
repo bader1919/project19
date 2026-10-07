@@ -17,6 +17,11 @@ import { ErrorBox, Spinner, StatusBadge } from "../components/ui";
 
 type Tab = "overview" | "links" | "transcript" | "description";
 
+/** Stored JSON is written by AI tools and other clients — never trust its shape when rendering. */
+function asArray<T>(v: T[] | null | undefined): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
   return (
@@ -79,7 +84,7 @@ function SummarySection({ item, onSaved }: { item: ItemFull; onSaved: () => void
   const [editing, setEditing] = useState(false);
   const [summary, setSummary] = useState(item.summary ?? "");
   const [points, setPoints] = useState((item.key_points ?? []).join("\n"));
-  const pointsKey = (item.key_points ?? []).join("\n");
+  const pointsKey = asArray(item.key_points).join("\n");
   useEffect(() => {
     if (editing) return; // never clobber an edit in progress when the item reloads
     setSummary(item.summary ?? "");
@@ -118,9 +123,9 @@ function SummarySection({ item, onSaved }: { item: ItemFull; onSaved: () => void
       ) : item.summary ? (
         <>
           <p dir="auto" className="whitespace-pre-line leading-relaxed text-slate-700 dark:text-slate-300">{item.summary}</p>
-          {item.key_points?.length > 0 && (
+          {asArray(item.key_points).length > 0 && (
             <ul dir="auto" className="mt-4 space-y-2">
-              {item.key_points.map((p, i) => (
+              {asArray(item.key_points).filter((p) => typeof p === "string").map((p, i) => (
                 <li key={i} className="flex gap-2 text-sm">
                   <ListChecks className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                   <span>{p}</span>
@@ -145,6 +150,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 function DescriptionInfoSection({ info, onSeek }: { info: DescriptionInfo[]; onSeek: (s: number) => void }) {
+  info = asArray(info).filter((d) => d && typeof d.text === "string");
   const chapters = info.filter((d) => d.kind === "chapter");
   const rest = info.filter((d) => d.kind !== "chapter");
   const groups = rest.reduce<Record<string, DescriptionInfo[]>>((acc, d) => ((acc[d.kind] ??= []).push(d), acc), {});
@@ -187,7 +193,7 @@ function DescriptionInfoSection({ info, onSeek }: { info: DescriptionInfo[]; onS
 }
 
 function MentionsSection({ item, onSeek }: { item: ItemFull; onSeek: (s: number) => void }) {
-  const mentions = item.video?.mentions ?? [];
+  const mentions = asArray(item.video?.mentions).filter((m) => m && typeof m.name === "string");
   if (!mentions.length) return null;
   return (
     <Section title="Mentioned in the video" icon={<MessageSquareQuote className="h-4 w-4 text-violet-500" />}>
@@ -235,7 +241,7 @@ function LinkRowView({ link, onSeek, onChanged }: { link: LinkRow; onSeek: (s: n
         <a href={safeHref(link.url)} target="_blank" rel="noreferrer" className="block truncate text-sm text-brand-600 hover:underline">{link.url}</a>
         {link.context && <p dir="auto" className="mt-0.5 line-clamp-2 text-xs text-slate-500">{link.context}</p>}
       </div>
-      <div className="ml-8 flex shrink-0 items-center gap-1 sm:ml-0">
+      <div className="ml-8 flex basis-full items-center justify-end gap-1 sm:ml-0 sm:basis-auto sm:shrink-0">
         <TimeButton sec={link.timestamp_sec} onSeek={onSeek} />
         <span className="chip hidden sm:inline-flex">{link.source}</span>
         <CopyButton text={link.url} label="Copy link" />
@@ -299,7 +305,7 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
   const [busy, setBusy] = useState(false);
   const [paste, setPaste] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const segs = item.video?.transcript_segments ?? [];
+  const segs = asArray(item.video?.transcript_segments).filter((s) => s && typeof s.text === "string");
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase();
     return f ? segs.filter((s) => s.text.toLowerCase().includes(f)) : segs;

@@ -79,9 +79,7 @@ export function installFakeYouTube(realFetch = globalThis.fetch) {
     if (!/(^|\.)youtube\.com$|^bit\.ly$/.test(url.hostname)) return realFetch(input, init);
 
     if (url.hostname === "bit.ly") {
-      const r = new Response(null, { status: 200 });
-      Object.defineProperty(r, "url", { value: "https://courses.example.com/rag?ref=yt" });
-      return r;
+      return new Response(null, { status: 301, headers: { location: "https://courses.example.com/rag?ref=yt" } });
     }
     if (url.pathname === "/watch") {
       const id = url.searchParams.get("v");

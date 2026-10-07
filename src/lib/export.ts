@@ -53,7 +53,7 @@ export async function exportMarkdown() {
     if (t.length) parts.push(`- Topics: ${t.map((x) => `#${String(x).replace(/\s+/g, "-")}`).join(" ")}`);
     parts.push("");
     if (it.summary) parts.push("### Summary", "", String(it.summary), "");
-    const kp = (it.key_points as string[]) ?? [];
+    const kp = (Array.isArray(it.key_points) ? it.key_points : []).filter((k): k is string => typeof k === "string");
     if (kp.length) parts.push("### Key points", "", ...kp.map((k) => `- ${k}`), "");
     const ls = linksBy.get(id) ?? [];
     if (ls.length) {
@@ -64,7 +64,7 @@ export async function exportMarkdown() {
       }
       parts.push("");
     }
-    const ms = (v?.mentions as { kind: string; name: string; context?: string }[]) ?? [];
+    const ms = (Array.isArray(v?.mentions) ? (v!.mentions as { kind: string; name: string; context?: string }[]) : []).filter((m) => m && typeof m.name === "string");
     if (ms.length) parts.push("### Mentioned", "", ...ms.map((m) => `- **${m.name}** (${m.kind})${m.context ? ` — ${m.context}` : ""}`), "");
     const ns = (notesBy.get(id) ?? []).filter((n) => String(n.body).trim());
     if (ns.length) parts.push("### My notes", "", ...ns.map((n) => `${n.body}\n`), "");
