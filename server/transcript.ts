@@ -125,7 +125,7 @@ Return ONLY a JSON array of segments in time order, one per sentence or short ph
 Also transcribe any URLs that are spoken or shown on screen exactly as they appear.`;
 
 interface GeminiResponse {
-  candidates?: { content?: { parts?: { text?: string }[] } }[];
+  candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] } }[];
   error?: { message?: string };
 }
 
@@ -162,24 +162,44 @@ export async function fromGemini(
       if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
       throw new Error(lastError);
     }
-    return parseGeminiTranscript(body);
+    try {
+      return parseGeminiTranscript(body);
+    } catch (e) {
+      lastError = `${m}: ${(e as Error).message}`; // try the next model
+    }
   }
   throw new Error(lastError || "Gemini is unavailable");
 }
 
-function parseGeminiTranscript(body: GeminiResponse): TranscriptResult {
-  const raw = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-  } catch {
-    throw new Error("Gemini returned an unreadable transcript");
+/** Pull the transcript array out of a Gemini reply, however it is wrapped. */
+export function parseGeminiTranscript(body: GeminiResponse): TranscriptResult {
+  const parts = body.candidates?.[0]?.content?.parts ?? [];
+  // Thinking models may return "thought" parts before the answer.
+  const raw = parts.filter((p) => !p.thought).map((p) => p.text ?? "").join("").trim();
+  let parsed: unknown = undefined;
+  const shapes = [
+    raw,
+    raw.replace(/^```(?:json)?\s*|\s*```$/g, ""),
+    raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1),
+  ];
+  for (const candidate of shapes) {
+    if (!candidate) continue;
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      // try the next shape
+    }
   }
-  const rows = Array.isArray(parsed) ? parsed : [];
+  if (parsed === undefined || parsed === null) throw new Error("Gemini returned an unreadable transcript");
+  // Accept a bare array or an object wrapping one ({"segments": [...]}).
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : ((Object.values(parsed as Record<string, unknown>).find(Array.isArray) as unknown[] | undefined) ?? []);
   const segments = rows
-    .map((r) => r as { t?: unknown; text?: unknown })
+    .map((r) => r as { t?: unknown; start?: unknown; text?: unknown })
     .filter((r) => typeof r.text === "string" && r.text.trim())
-    .map((r) => ({ start: Math.max(0, Number(r.t) || 0), dur: 0, text: String(r.text).trim() }))
+    .map((r) => ({ start: Math.max(0, Number(r.t ?? r.start) || 0), dur: 0, text: String(r.text).trim() }))
     .sort((a, b) => a.start - b.start);
   if (!segments.length) throw new Error("Gemini returned an empty transcript");
   const sample = segments.slice(0, 20).map((s) => s.text).join(" ");

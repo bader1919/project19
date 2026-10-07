@@ -515,20 +515,34 @@ async function fromGemini(id, apiKey, model = DEFAULT_GEMINI_MODEL, fetchImpl = 
       if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
       throw new Error(lastError);
     }
-    return parseGeminiTranscript(body);
+    try {
+      return parseGeminiTranscript(body);
+    } catch (e) {
+      lastError = `${m}: ${e.message}`;
+    }
   }
   throw new Error(lastError || "Gemini is unavailable");
 }
 function parseGeminiTranscript(body) {
-  const raw = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  let parsed;
-  try {
-    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-  } catch {
-    throw new Error("Gemini returned an unreadable transcript");
+  const parts = body.candidates?.[0]?.content?.parts ?? [];
+  const raw = parts.filter((p) => !p.thought).map((p) => p.text ?? "").join("").trim();
+  let parsed = void 0;
+  const shapes = [
+    raw,
+    raw.replace(/^```(?:json)?\s*|\s*```$/g, ""),
+    raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1)
+  ];
+  for (const candidate of shapes) {
+    if (!candidate) continue;
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+    }
   }
-  const rows = Array.isArray(parsed) ? parsed : [];
-  const segments = rows.map((r) => r).filter((r) => typeof r.text === "string" && r.text.trim()).map((r) => ({ start: Math.max(0, Number(r.t) || 0), dur: 0, text: String(r.text).trim() })).sort((a, b) => a.start - b.start);
+  if (parsed === void 0 || parsed === null) throw new Error("Gemini returned an unreadable transcript");
+  const rows = Array.isArray(parsed) ? parsed : Object.values(parsed).find(Array.isArray) ?? [];
+  const segments = rows.map((r) => r).filter((r) => typeof r.text === "string" && r.text.trim()).map((r) => ({ start: Math.max(0, Number(r.t ?? r.start) || 0), dur: 0, text: String(r.text).trim() })).sort((a, b) => a.start - b.start);
   if (!segments.length) throw new Error("Gemini returned an empty transcript");
   const sample = segments.slice(0, 20).map((s) => s.text).join(" ");
   const lang = (sample.match(/[\u0600-\u06FF]/g) ?? []).length > (sample.match(/[A-Za-z]/g) ?? []).length ? "ar" : "en";

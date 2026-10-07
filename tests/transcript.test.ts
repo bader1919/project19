@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fromGemini, fromSupadata, fromYoutubeTranscriptIo, getTranscript, segmentsToText } from "../server/transcript";
+import { fromGemini, fromSupadata, fromYoutubeTranscriptIo, getTranscript, parseGeminiTranscript, segmentsToText } from "../server/transcript";
 import type { CaptionTrack } from "../server/youtube";
 
 const ID = "dQw4w9WgXcQ";
@@ -257,5 +257,34 @@ describe("fromGemini model fallback", () => {
     const busy = vi.fn(async () => new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 }));
     await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, busy as unknown as typeof fetch)).rejects.toThrow(/503: high demand/);
     expect(busy).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("parseGeminiTranscript", () => {
+  const reply = (parts: { text: string; thought?: boolean }[]) => ({ candidates: [{ content: { parts } }] });
+
+  it("skips thought parts and finds the array inside prose", () => {
+    const out = parseGeminiTranscript(
+      reply([{ text: "Let me think about this…", thought: true }, { text: 'Here you go:\n[{"t": 2, "text": "hello"}]\nDone.' }]),
+    );
+    expect(out.segments).toEqual([{ start: 2, dur: 0, text: "hello" }]);
+  });
+
+  it("accepts an object wrapping the array, and start instead of t", () => {
+    const out = parseGeminiTranscript(reply([{ text: '{"segments": [{"start": 5, "text": "x"}]}' }]));
+    expect(out.segments).toEqual([{ start: 5, dur: 0, text: "x" }]);
+  });
+
+  it("moves on to the next model when a reply is unreadable", async () => {
+    const seen: string[] = [];
+    const fetchImpl = async (u: string) => {
+      const m = u.match(/models\/([^:]+):/)![1];
+      seen.push(m);
+      const text = m === "gemini-flash-latest" ? "sorry, no JSON here" : '[{"t":0,"text":"ok"}]';
+      return new Response(JSON.stringify(reply([{ text }])));
+    };
+    const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
+    expect(res.segments[0].text).toBe("ok");
+    expect(seen).toEqual(["gemini-flash-latest", "gemini-flash-lite-latest"]);
   });
 });
