@@ -60,11 +60,11 @@ export async function fromSupadata(
   apiKey: string,
   fetchImpl: Fetch = fetch,
   pollMs = 2000,
-  maxPolls = 6,
+  maxPolls = 3,
 ): Promise<TranscriptResult> {
   const headers = { "x-api-key": apiKey };
   const url = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(youtubeWatchUrl(id))}&text=false&mode=auto`;
-  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(15000) });
+  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10000) });
   const body = (await res.json().catch(() => ({}))) as SupadataResponse;
   if (!res.ok && res.status !== 202) {
     const msg = typeof body.error === "string" ? body.error : body.error?.message;
@@ -97,7 +97,7 @@ export async function fromYoutubeTranscriptIo(id: string, apiKey: string, fetchI
     method: "POST",
     headers: { Authorization: `Basic ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [id] }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`youtube-transcript.io ${res.status}`);
   const data = (await res.json()) as { tracks?: YtioTrack[] }[];
@@ -119,6 +119,8 @@ export async function getTranscript(
   tracks: CaptionTrack[],
   keys: TranscriptKeys,
   fetchImpl: Fetch = fetch,
+  /** Stop trying new sources after this time (Netlify functions are limited to 30 s). */
+  deadline = Date.now() + 18_000,
 ): Promise<{ result: TranscriptResult | null; attempts: TranscriptAttempt[] }> {
   const attempts: TranscriptAttempt[] = [];
   const sources: [string, () => Promise<TranscriptResult>][] = [];
@@ -127,6 +129,10 @@ export async function getTranscript(
   if (keys.ytio_key) sources.push(["youtube-transcript.io", () => fromYoutubeTranscriptIo(id, keys.ytio_key!, fetchImpl)]);
 
   for (const [source, run] of sources) {
+    if (Date.now() > deadline) {
+      attempts.push({ source, error: "skipped (out of time) — press retry" });
+      continue;
+    }
     try {
       const result = await run();
       if (result.segments.length) return { result, attempts };

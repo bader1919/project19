@@ -114,7 +114,7 @@ export function metaFromPlayer(id: string, player: any): VideoMeta {
 async function oembedMeta(id: string, fetchImpl: Fetch): Promise<VideoMeta> {
   const res = await fetchImpl(
     `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(youtubeWatchUrl(id))}`,
-    { signal: AbortSignal.timeout(6000) },
+    { signal: AbortSignal.timeout(4000) },
   );
   if (!res.ok) throw new Error(`YouTube oEmbed returned ${res.status} (video private or removed?)`);
   const o = (await res.json()) as { title?: string; author_name?: string; author_url?: string; thumbnail_url?: string };
@@ -136,7 +136,7 @@ export async function fetchVideo(id: string, fetchImpl: Fetch = fetch): Promise<
   try {
     const res = await fetchImpl(`${youtubeWatchUrl(id)}&hl=en`, {
       headers: BROWSER_HEADERS,
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(6000),
     });
     if (res.ok) html = await res.text();
   } catch {
@@ -160,7 +160,7 @@ export async function fetchVideo(id: string, fetchImpl: Fetch = fetch): Promise<
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept-Language": BROWSER_HEADERS["Accept-Language"] },
         body: JSON.stringify({ context: { client: INNERTUBE_CLIENT }, videoId: id }),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(5000),
       });
       if (res.ok) captionTracks = tracksFrom(await res.json());
       else captionsError = `YouTube player API returned ${res.status}`;
@@ -234,7 +234,7 @@ export function parseTimedText(xml: string): TranscriptSegment[] {
 
 export async function downloadCaptionTrack(track: CaptionTrack, fetchImpl: Fetch = fetch): Promise<TranscriptSegment[]> {
   const url = track.baseUrl.replace(/&fmt=[^&]*/, "");
-  const res = await fetchImpl(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) });
+  const res = await fetchImpl(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
   if (!res.ok) throw new Error(`Caption download returned ${res.status}`);
   const xml = await res.text();
   if (!xml.trim()) throw new Error("YouTube returned an empty caption file (blocked from this server)");
