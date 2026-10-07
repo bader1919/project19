@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "allow": ["mcp__Supabase", "mcp__Netlify", "mcp__github", "mcp__claude-code-remote"]
+  }
+}
