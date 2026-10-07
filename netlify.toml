@@ -1,0 +1,12 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Single-page app: every unknown route serves index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
