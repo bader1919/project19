@@ -1,55 +1,91 @@
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
+import { timeAgo as timeAgoImpl } from "../lib/format";
 
+/** Inline busy indicator for short actions (under ~1s). Lists use <SkeletonRows /> instead. */
 export function Spinner({ label }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 py-10 text-sm text-slate-500" role="status">
-      <Loader2 className="h-4 w-4 animate-spin" /> {label ?? "Loading…"}
+    <div className="flex items-center gap-2 py-10 text-meta text-ink-2" role="status">
+      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> {label ?? "Loading…"}
     </div>
   );
 }
 
-export function ErrorBox({ message }: { message: string }) {
+/** Failure row. Say what failed and how to fix it; pass `onRetry` to show a "Try again" button. */
+export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300" role="alert">
-      {message}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-s-4 border-danger bg-danger/10 px-4 py-3 text-body text-ink" role="alert">
+      <span className="min-w-0" dir="auto">{message}</span>
+      {onRetry && <button type="button" className="btn-outline btn-sm" onClick={onRetry}>Try again</button>}
     </div>
   );
 }
 
-export function EmptyState({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
+/** Empty or filtered-zero state: a heading, one sentence, one action. No illustration. */
+export function EmptyState({
+  title, children, action,
+}: {
+  title: string;
+  children?: ReactNode;
+  /** Primary next step, e.g. <button className="btn-primary">Save a video</button>. */
+  action?: ReactNode;
+  /** legacy: remove after C/D (ignored) */
+  icon?: ReactNode;
+}) {
   return (
-    <div className="card flex flex-col items-center px-6 py-14 text-center">
-      <div className="mb-3 text-slate-400">{icon}</div>
-      <h3 className="font-semibold">{title}</h3>
-      {children && <div className="mt-1 max-w-md text-sm text-slate-500">{children}</div>}
+    <div className="py-12">
+      <h2 className="text-h2">{title}</h2>
+      {children && <div className="mt-2 max-w-prose text-body text-ink-2">{children}</div>}
+      {action && <div className="mt-5 flex flex-wrap gap-2">{action}</div>}
     </div>
   );
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
+/** Page title (serif) with an optional one-line meta and right-aligned actions. */
+export function PageHeader({
+  title, meta, subtitle, actions,
+}: {
+  title: string;
+  meta?: ReactNode;
+  /** legacy alias of `meta`: remove after C/D */
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+}) {
+  const line = meta ?? subtitle;
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+      <div className="min-w-0">
+        <h1 dir="auto" className="text-title max-sm:text-[1.5rem] max-sm:leading-[1.875rem]">{title}</h1>
+        {line && <p className="mt-1 text-meta text-ink-2">{line}</p>}
       </div>
       {actions && <div className="flex gap-2">{actions}</div>}
     </div>
   );
 }
 
-const STATUS: Record<string, { label: string; cls: string }> = {
-  analyzed: { label: "Analyzed", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
-  fetched: { label: "Summarizing…", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  transcript_pending: { label: "Getting transcript…", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
-  error: { label: "Error", cls: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
+const STATUS: Record<string, { short: string; long: string }> = {
+  fetched: { short: "Summarizing", long: "Summarizing, usually within two minutes" },
+  transcript_pending: { short: "Getting transcript", long: "Getting transcript, usually under a minute" },
+  error: { short: "Needs attention", long: "Needs attention" },
 };
 
-export function StatusBadge({ status }: { status: string }) {
-  const s = STATUS[status] ?? { label: status, cls: "bg-slate-100 text-slate-600" };
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${s.cls}`}>{s.label}</span>;
+/**
+ * Status as plain text with a dot. Renders nothing for "analyzed" (done is the default).
+ * `long` adds the expected wait ("Summarizing, usually within two minutes").
+ */
+export function StatusNote({ status, long = false }: { status: string; long?: boolean }) {
+  if (status === "analyzed") return null;
+  const s = STATUS[status] ?? { short: status, long: status };
+  return (
+    <span className="inline-flex items-center gap-1.5 text-small text-warn-ink">
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full bg-warn-ink ${status === "error" ? "" : "animate-pulse-soft"}`} />
+      {long ? s.long : s.short}
+    </span>
+  );
 }
+
+/** legacy: remove after C/D (use StatusNote) */
+export const StatusBadge = StatusNote;
 
 /** Render a search snippet where matches are wrapped in [[ ]] by Postgres ts_headline. */
 export function Highlight({ text }: { text: string }) {
@@ -61,11 +97,5 @@ export function Highlight({ text }: { text: string }) {
   );
 }
 
-export function timeAgo(iso: string): string {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
+/** Re-exported for existing imports; the implementation lives in lib/format.ts. */
+export const timeAgo = timeAgoImpl;

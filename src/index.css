@@ -2,21 +2,103 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   Design tokens (space-separated RGB so Tailwind opacity works).
+   See docs/design/PLAN.md section 2.1.
+   ------------------------------------------------------------------ */
+:root {
+  --paper: 242 244 241;
+  --sheet: 255 255 255;
+  --pop: 255 255 255;
+  --ink: 22 32 42;
+  --ink-2: 75 88 99;
+  --line: 216 222 218;
+  --binding: 23 102 90;
+  --on-binding: 255 255 255;
+  --binding-wash: 225 239 234;
+  --marker: 255 223 107;
+  --marker-ink: 42 33 0;
+  --danger: 179 38 30;
+  --warn-bg: 251 239 208;
+  --warn-ink: 138 90 0;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: 18 24 27;
+    --sheet: 26 34 38;
+    --pop: 34 45 50;
+    --ink: 231 237 233;
+    --ink-2: 162 176 184;
+    --line: 42 53 59;
+    --binding: 116 205 180;
+    --on-binding: 11 21 19;
+    --binding-wash: 28 47 44;
+    --marker: 229 191 63;
+    --marker-ink: 30 24 0;
+    --danger: 242 139 130;
+    --warn-bg: 51 40 15;
+    --warn-ink: 240 195 106;
+  }
+}
+
 @layer base {
-  html { -webkit-tap-highlight-color: transparent; }
-  body { @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100; }
-  :focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white dark:ring-offset-slate-950; }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    color-scheme: light dark;
+  }
+  body { @apply bg-paper font-sans text-body text-ink antialiased; }
+  h1, h2, h3 { @apply font-serif; }
+  :focus-visible { outline: 2px solid rgb(var(--binding)); outline-offset: 2px; }
+  /* Arabic text needs more leading than Latin at the same size. */
+  [dir="rtl"], :dir(rtl), :lang(ar) { line-height: 1.9; }
+  .num { font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  }
 }
 
 @layer components {
-  .card { @apply rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900; }
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50; }
-  .btn-primary { @apply btn bg-brand-500 text-white hover:bg-brand-600; }
-  .btn-ghost { @apply btn text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800; }
-  .btn-outline { @apply btn border border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800; }
-  .btn-danger { @apply btn text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950; }
-  .input { @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900; }
-  .chip { @apply inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300; }
-  .section-title { @apply text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400; }
-  mark { @apply rounded bg-amber-200/70 px-0.5 text-inherit dark:bg-amber-500/30; }
+  /* Buttons: 44px at <sm (touch), 40px from sm. Add .btn-sm for 36/32. */
+  .btn { @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-ctl px-4 text-body font-medium transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[40px]; }
+  .btn-primary { @apply btn bg-binding text-on-binding hover:brightness-95; }
+  .btn-outline { @apply btn border border-line bg-sheet text-ink hover:bg-binding-wash; }
+  .btn-ghost { @apply btn text-ink-2 hover:bg-binding-wash hover:text-ink; }
+  .btn-danger { @apply btn text-danger hover:bg-danger/10; }
+  .btn-danger-solid { @apply btn bg-danger text-paper hover:brightness-95; }
+  /* Must stay after the variants above so its sizes win. */
+  .btn-sm { @apply min-h-[44px] px-3 text-meta sm:min-h-[32px]; }
+
+  /* Square icon-only button; 44px touch, 32px desktop. Prefer <IconButton>. */
+  .icon-btn { @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-ctl text-ink-2 transition-colors duration-100 hover:bg-binding-wash hover:text-ink disabled:opacity-50 sm:h-8 sm:w-8; }
+
+  .input { @apply min-h-[44px] w-full rounded-ctl border border-line bg-sheet px-3 text-body placeholder:text-ink-2/70 sm:min-h-[40px]; }
+  textarea.input { @apply py-2; }
+  .chip { @apply inline-flex items-center gap-1 rounded-tab bg-binding-wash px-2 py-0.5 text-small text-ink; }
+  a.chip, button.chip { @apply hover:underline; }
+
+  /* List row on paper, divided by hairlines. */
+  .row { @apply border-b border-line py-4; }
+  /* The one raised surface: item header, popovers, dialogs. */
+  .sheet { @apply rounded-frame border border-line bg-sheet; }
+  .popover { @apply rounded-frame border border-line bg-pop shadow-float; }
+
+  /* Locator tab: the timestamp as a highlighter-marked page number. 24px visible, ~44px hit area. */
+  .locator { @apply num relative inline-flex min-h-[24px] shrink-0 items-center rounded-tab bg-marker px-1.5 text-small font-semibold text-marker-ink; }
+  .locator::before { content: ""; position: absolute; inset: -10px -4px; }
+  button.locator, a.locator { @apply cursor-pointer hover:brightness-95; }
+
+  mark { @apply rounded-tab bg-marker/60 px-0.5 text-inherit; }
+
+  .skeleton { @apply animate-pulse-soft rounded-tab bg-line; }
+
+  /* legacy: remove after C/D */
+  .card { @apply rounded-frame border border-line bg-sheet; }
+  .section-title { @apply text-meta font-semibold text-ink-2; }
 }
+
+/* Serif lead copy is optically larger in Arabic. */
+.text-lead:dir(rtl), .text-lead[dir="rtl"] { font-size: 1.1875rem; line-height: 2.125rem; }
+
+/* Skeletons appear only after --skeleton-delay (default 300ms) so quick loads never flash a loader. */
+@keyframes lazyIn { from { opacity: 0; } to { opacity: 1; } }
+.lazy-in { animation: lazyIn 120ms ease-out var(--skeleton-delay, 300ms) backwards; }

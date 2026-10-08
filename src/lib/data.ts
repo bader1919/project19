@@ -14,6 +14,8 @@ export interface SearchRow {
   snippet: string | null;
   rank: number;
   tags: string[];
+  /** Filled by searchItems from video_details (seconds). */
+  duration_sec?: number | null;
 }
 
 export interface LinkRow {
@@ -89,7 +91,7 @@ export async function searchItems(p: {
   limit?: number;
   offset?: number;
 }): Promise<SearchRow[]> {
-  return check(
+  const rows = check(
     await supabase.rpc("search_library", {
       q: p.q || null,
       p_type: p.type || null,
@@ -100,6 +102,14 @@ export async function searchItems(p: {
       p_offset: p.offset ?? 0,
     }),
   ) as SearchRow[];
+  // Durations are not part of the search RPC; fetch them for the visible rows (best effort).
+  const ids = rows.filter((r) => r.type === "video").map((r) => r.id);
+  if (ids.length) {
+    const { data } = await supabase.from("video_details").select("item_id, duration_sec").in("item_id", ids);
+    const dur = new Map((data ?? []).map((d: { item_id: string; duration_sec: number | null }) => [d.item_id, d.duration_sec]));
+    for (const r of rows) r.duration_sec = dur.get(r.id) ?? null;
+  }
+  return rows;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
