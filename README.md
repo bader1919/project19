@@ -23,7 +23,6 @@ RefVault runs its own **MCP server**. You add it to Claude once as a *custom con
 
 Claude calls `add_video`, which fetches the transcript and links. Claude then reads the transcript and calls `save_analysis` with the summary, topics, link labels and mentions. You can also ask:
 
-> Analyze my pending RefVault videos
 > Which video mentioned a vector database? Give me the link.
 > Find the link to that course discount someone shared
 
@@ -38,14 +37,28 @@ Claude calls `add_video`, which fetches the transcript and links. Claude then re
 | `list_topics` / `list_pending` | Existing topics; items waiting for analysis |
 | `add_note`, `add_link`, `tag_item`, `add_to_collection`, `retry_transcript` | Edits |
 
-## Transcripts: free first
+## Everything is automatic
 
-1. **YouTube captions, read directly.** Free, unlimited, no key. This works for most videos.
-2. **[Supadata](https://supadata.ai)** (optional key, 100 free transcripts a month). It is used when YouTube blocks the server, and it can also transcribe videos that have **no captions**.
-3. **[youtube-transcript.io](https://www.youtube-transcript.io)** (optional key, 25 free a month) as a second backup.
-4. **Paste it yourself.** If everything fails, the video is still saved and marked *No transcript*, with a retry button and a paste box.
+After you save a video (from the app, your phone's share menu, or Claude), nothing else is needed:
 
-Add the optional keys in **Settings → Transcript sources**.
+1. **Transcript.** Tried in this order:
+   - **YouTube captions, read by the server.** Free, but YouTube usually blocks cloud servers.
+   - **Your PC helper** (Settings → PC helper). A small background program on your own computer, whose home
+     connection YouTube does not block. It fetches the real captions with
+     [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) and the video description,
+     and sends them to your library within ~20 seconds. Installed with one copied command, no admin rights,
+     and it starts with your computer.
+   - **Google Gemini** watches the video itself, so it also covers videos with no captions. It runs in the
+     background when the PC helper is off or had nothing (after 3 minutes), in 10-minute parts for long
+     videos (free tier: up to 8 hours of video a day).
+   - Optional backups: [Supadata](https://supadata.ai) and [youtube-transcript.io](https://www.youtube-transcript.io) keys,
+     or paste the transcript yourself.
+2. **Analysis.** Gemini writes the summary, key points, topics, link labels and spoken mentions. If Claude
+   analyses the video through the connector, Claude's version is kept.
+
+A worker runs every minute (`pg_cron` → Edge Function `/worker`, migration `004_auto_pipeline.sql`) and
+retries failures with back-off. It needs two rows in `private.app_secrets`: `worker_url`
+(`https://<project>.supabase.co/functions/v1/refvault/worker`) and `worker_secret` (any long random string).
 
 ---
 
