@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { DescriptionInfo } from "../../../shared/types";
 import { Locator } from "../Locator";
-import { safeHref } from "../SiteIcon";
+import { safeHref } from "../../lib/url";
 import { Block, asArray, type SeekFn } from "./shared";
 
 const KIND_LABEL: Record<string, string> = {

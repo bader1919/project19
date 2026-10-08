@@ -4,7 +4,7 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import type { LinkRow as LinkData } from "../lib/data";
 import { IconButton } from "./IconButton";
 import { Locator } from "./Locator";
-import { safeHref } from "./SiteIcon";
+import { safeHref } from "../lib/url";
 
 const RTL = /[֐-ࣿ]/;
 

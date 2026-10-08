@@ -20,9 +20,10 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 
 function NotFound() {
   return (
-    <div className="card p-8 text-center">
-      <h1 className="text-lg font-semibold">Page not found</h1>
-      <Link to="/" className="mt-2 inline-block text-sm text-brand-600 hover:underline">Go to Home</Link>
+    <div className="py-12">
+      <h1 className="text-title">Page not found</h1>
+      <p className="mt-2 text-body text-ink-2">This address doesn't match any page in your library.</p>
+      <Link to="/" className="btn-primary mt-5">Go to Home</Link>
     </div>
   );
 }

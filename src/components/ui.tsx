@@ -29,8 +29,6 @@ export function EmptyState({
   children?: ReactNode;
   /** Primary next step, e.g. <button className="btn-primary">Save a video</button>. */
   action?: ReactNode;
-  /** legacy: remove after C/D (ignored) */
-  icon?: ReactNode;
 }) {
   return (
     <div className="py-12">
@@ -43,15 +41,13 @@ export function EmptyState({
 
 /** Page title (serif) with an optional one-line meta and right-aligned actions. */
 export function PageHeader({
-  title, meta, subtitle, actions,
+  title, meta, actions,
 }: {
   title: string;
   meta?: ReactNode;
-  /** legacy alias of `meta`: remove after C/D */
-  subtitle?: ReactNode;
   actions?: ReactNode;
 }) {
-  const line = meta ?? subtitle;
+  const line = meta;
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
@@ -84,8 +80,6 @@ export function StatusNote({ status, long = false }: { status: string; long?: bo
   );
 }
 
-/** legacy: remove after C/D (use StatusNote) */
-export const StatusBadge = StatusNote;
 
 /** Render a search snippet where matches are wrapped in [[ ]] by Postgres ts_headline. */
 export function Highlight({ text }: { text: string }) {

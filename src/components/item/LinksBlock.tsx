@@ -5,7 +5,7 @@ import { Locator } from "../Locator";
 import { IconButton } from "../IconButton";
 import { Menu } from "../Menu";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { safeHref } from "../SiteIcon";
+import { safeHref } from "../../lib/url";
 import { Block, CopyButton, type SeekFn } from "./shared";
 
 const RTL = /[֐-ࣿ]/;

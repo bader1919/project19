@@ -8,7 +8,7 @@ import { useAsync } from "../lib/useAsync";
 import { ItemRow } from "../components/ItemRow";
 import { Locator } from "../components/Locator";
 import { SkeletonRows } from "../components/Skeleton";
-import { safeHref } from "../components/SiteIcon";
+import { safeHref } from "../lib/url";
 import { EmptyState, ErrorBox, StatusNote } from "../components/ui";
 
 /** One input: a YouTube link saves it, anything else searches the library. The button label follows the input. */

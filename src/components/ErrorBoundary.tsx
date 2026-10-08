@@ -19,9 +19,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: s
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="card p-6 text-sm" role="alert">
-        <h2 className="mb-1 font-semibold">Something went wrong on this page</h2>
-        <p className="text-slate-500">{this.state.error.message}</p>
+      <div className="border-s-4 border-danger bg-danger/10 p-5" role="alert">
+        <h2 className="text-h2">This page couldn't be shown</h2>
+        <p className="mt-1 text-body text-ink-2">{this.state.error.message}</p>
         <button className="btn-outline mt-4" onClick={() => this.setState({ error: null })}>Try again</button>
       </div>
     );

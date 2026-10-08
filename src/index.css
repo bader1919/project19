@@ -90,10 +90,6 @@
   mark { @apply rounded-tab bg-marker/60 px-0.5 text-inherit; }
 
   .skeleton { @apply animate-pulse-soft rounded-tab bg-line; }
-
-  /* legacy: remove after C/D */
-  .card { @apply rounded-frame border border-line bg-sheet; }
-  .section-title { @apply text-meta font-semibold text-ink-2; }
 }
 
 /* Serif lead copy is optically larger in Arabic. */

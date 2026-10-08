@@ -1,6 +1,6 @@
 import type { ItemFull } from "../../lib/data";
 import { Locator } from "../Locator";
-import { safeHref } from "../SiteIcon";
+import { safeHref } from "../../lib/url";
 import { Block, asArray, type SeekFn } from "./shared";
 
 /** Things said in the video: locator tab first, name, kind as plain text, context below. */

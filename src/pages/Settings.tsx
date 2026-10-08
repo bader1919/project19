@@ -258,8 +258,8 @@ function TranscriptKeysSection() {
         >
           <input id="gemini" type="password" autoComplete="off" aria-describedby="gemini-hint" className="input" value={gemini} onChange={(e) => setGemini(e.target.value)} placeholder="AIza…" />
         </Field>
-        <Field id="gemini-model" label="Gemini model (optional)" hint="Leave empty to use gemini-flash-latest.">
-          <input id="gemini-model" aria-describedby="gemini-model-hint" className="input" value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-flash-latest" />
+        <Field id="gemini-model" label="Gemini model (optional)" hint="Leave empty to use gemini-3.5-flash.">
+          <input id="gemini-model" aria-describedby="gemini-model-hint" className="input" value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-3.5-flash" />
         </Field>
         <Field
           id="supadata"

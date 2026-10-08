@@ -26,14 +26,6 @@ export default {
         danger: token("danger"),
         "warn-bg": token("warn-bg"),
         "warn-ink": token("warn-ink"),
-        /* legacy: remove after C/D (ItemPage and D pages still use brand-*) */
-        brand: {
-          50: token("binding-wash"),
-          100: token("binding-wash"),
-          500: token("binding"),
-          600: token("binding"),
-          700: token("binding"),
-        },
       },
       fontSize: {
         display: ["2.125rem", { lineHeight: "2.5rem", fontWeight: "600" }],
