@@ -6,3 +6,4 @@ dist
 *.log
 *.tsbuildinfo
 .deploy/
+__pycache__/
