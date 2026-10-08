@@ -152,7 +152,7 @@ function HelperSection() {
     <Section title="PC helper">
       <p className="text-ink-2">
         YouTube blocks cloud servers but not your home internet. This small background program on your computer fetches the real captions
-        and video description for every video you save. When your computer is off, Gemini does it instead. Either way it's automatic.
+        and video description for every video you save. When your computer is off, the transcript services below do it instead. Either way it's automatic.
       </p>
       <p role="status" className={`flex items-center gap-2 font-medium ${running ? "text-binding" : "text-ink-2"}`}>
         <span aria-hidden="true" className={`h-2 w-2 rounded-full ${running ? "bg-binding" : "border border-ink-2"}`} />
@@ -203,8 +203,7 @@ function HelperSection() {
 function TranscriptKeysSection() {
   const [supadata, setSupadata] = useState("");
   const [ytio, setYtio] = useState("");
-  const [gemini, setGemini] = useState("");
-  const [geminiModel, setGeminiModel] = useState("");
+  const [googleKey, setGoogleKey] = useState("");
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,21 +211,20 @@ function TranscriptKeysSection() {
   useEffect(() => {
     supabase
       .from("user_settings")
-      .select("supadata_key, ytio_key, gemini_key, gemini_model")
+      .select("supadata_key, ytio_key, gemini_key")
       .maybeSingle()
       .then(({ data }) => {
         setSupadata(data?.supadata_key ?? "");
         setYtio(data?.ytio_key ?? "");
-        setGemini(data?.gemini_key ?? "");
-        setGeminiModel(data?.gemini_model ?? "");
+        setGoogleKey(data?.gemini_key ?? "");
       });
   }, []);
 
   return (
-    <Section title="Transcript sources">
+    <Section title="Transcripts and summaries">
       <p className="text-ink-2">
-        RefVault first reads captions straight from YouTube, which is <strong className="font-medium text-ink">free and needs no key</strong>.
-        When YouTube blocks the server or a video has no captions, it tries these free-tier services in this order. All are optional.
+        Transcripts come from YouTube's captions, then your PC helper, then these transcript services (free tiers). Summaries, topics and
+        link labels are written by Gemma 4.
       </p>
       <form
         className="space-y-4"
@@ -238,8 +236,7 @@ function TranscriptKeysSection() {
             user_id: u.user!.id,
             supadata_key: supadata.trim() || null,
             ytio_key: ytio.trim() || null,
-            gemini_key: gemini.trim() || null,
-            gemini_model: geminiModel.trim() || null,
+            gemini_key: googleKey.trim() || null,
             updated_at: new Date().toISOString(),
           });
           setSaving(false);
@@ -251,16 +248,6 @@ function TranscriptKeysSection() {
           }
         }}
       >
-        <Field
-          id="gemini"
-          label="Google Gemini API key"
-          hint={<>Free, up to 8 hours of video a day. Gemini watches the video itself, so it works without captions. <Link href="https://aistudio.google.com/apikey">Get a free key at Google AI Studio</Link></>}
-        >
-          <input id="gemini" type="password" autoComplete="off" aria-describedby="gemini-hint" className="input" value={gemini} onChange={(e) => setGemini(e.target.value)} placeholder="AIza…" />
-        </Field>
-        <Field id="gemini-model" label="Gemini model (optional)" hint="Leave empty to use gemini-3.5-flash.">
-          <input id="gemini-model" aria-describedby="gemini-model-hint" className="input" value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-3.5-flash" />
-        </Field>
         <Field
           id="supadata"
           label="Supadata API key"
@@ -274,6 +261,13 @@ function TranscriptKeysSection() {
           hint={<>25 free transcripts a month. <Link href="https://www.youtube-transcript.io">Get a free token at youtube-transcript.io</Link></>}
         >
           <input id="ytio" type="password" autoComplete="off" aria-describedby="ytio-hint" className="input" value={ytio} onChange={(e) => setYtio(e.target.value)} />
+        </Field>
+        <Field
+          id="google-key"
+          label="Google AI Studio key for Gemma 4 (optional)"
+          hint={<>Writes the automatic summaries. Leave empty to use RefVault's own key. <Link href="https://aistudio.google.com/apikey">Get a free key at Google AI Studio</Link></>}
+        >
+          <input id="google-key" type="password" autoComplete="off" aria-describedby="google-key-hint" className="input" value={googleKey} onChange={(e) => setGoogleKey(e.target.value)} />
         </Field>
         <button className="btn-primary" disabled={saving}>
           {saving ? "Saving…" : saved ? <><Check className="h-4 w-4" aria-hidden="true" /> Saved</> : "Save keys"}

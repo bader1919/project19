@@ -48,12 +48,11 @@ After you save a video (from the app, your phone's share menu, or Claude), nothi
      [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) and the video description,
      and sends them to your library within ~20 seconds. Installed with one copied command, no admin rights,
      and it starts with your computer.
-   - **Google Gemini** watches the video itself, so it also covers videos with no captions. It runs in the
-     background when the PC helper is off or had nothing (after 3 minutes), in 10-minute parts for long
-     videos (free tier: up to 8 hours of video a day).
-   - Optional backups: [Supadata](https://supadata.ai) and [youtube-transcript.io](https://www.youtube-transcript.io) keys,
-     or paste the transcript yourself.
-2. **Analysis.** Gemini writes the summary, key points, topics, link labels and spoken mentions. If Claude
+   - **Transcript APIs:** [Supadata](https://supadata.ai) (100 free a month) and
+     [youtube-transcript.io](https://www.youtube-transcript.io) (25 free a month), with keys from Settings. They run in
+     the background when the PC helper is off or had nothing (after 3 minutes), retried with back-off.
+   - Or paste the transcript yourself.
+2. **Analysis.** Gemma 4 (Google AI Studio, text only) writes the summary, key points, topics, link labels and spoken mentions. If Claude
    analyses the video through the connector, Claude's version is kept.
 
 A worker runs every minute (`pg_cron` → Edge Function `/worker`, migration `004_auto_pipeline.sql`) and

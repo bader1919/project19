@@ -446,10 +446,6 @@ async function downloadCaptionTrack(track, fetchImpl = fetch) {
 }
 
 // server/transcript.ts
-var DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
-var GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash"];
-var THINKING_OFF = /* @__PURE__ */ new Set(["gemini-3.5-flash"]);
-var isKeyError = (status, message = "") => status === 401 || status === 403 || status === 400 && /api key/i.test(message);
 async function fromYouTube(tracks, fetchImpl = fetch) {
   const track = pickCaptionTrack(tracks);
   if (!track) throw new Error("no captions available");
@@ -525,118 +521,10 @@ async function fromYoutubeTranscriptIo(id, apiKey, fetchImpl = fetch) {
     source: "youtube-transcript.io"
   };
 }
-var GEMINI_PROMPT = `Transcribe ALL speech in this video word for word, in the language actually spoken (do not translate; keep Arabic in Arabic script).
-Do not summarize, shorten or skip anything: every sentence that is said must appear.
-Return ONLY a JSON array in time order, one item per sentence:
-[{"t": "MM:SS", "text": "what was said"}]
-t is the time the sentence starts, measured from the beginning of the FULL video (for example "12:05", or "1:02:03" past an hour).
-Also write any URLs that are spoken or shown on screen exactly as they appear.
-If there is no speech, return [].`;
-async function fromGemini(id, apiKey, model = DEFAULT_GEMINI_MODEL, fetchImpl = fetch, timeoutMs = 11e4, perModelMs = 4e4, clip) {
-  const stopAt = Date.now() + timeoutMs;
-  let internalErrors = 0;
-  let calls = 0;
-  const first = /^[a-z0-9.\-]+$/i.test(model) ? model : DEFAULT_GEMINI_MODEL;
-  const models = [.../* @__PURE__ */ new Set([first, ...GEMINI_FALLBACK_MODELS])];
-  let lastError = "";
-  for (const m of models) {
-    const left = stopAt - Date.now();
-    if (left < 5e3) break;
-    let res;
-    try {
-      res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents: [{ parts: [videoPart(id, clip), { text: GEMINI_PROMPT }] }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json",
-            mediaResolution: "MEDIA_RESOLUTION_LOW",
-            ...THINKING_OFF.has(m) ? { thinkingConfig: { thinkingBudget: 0 } } : {}
-          }
-        }),
-        signal: AbortSignal.timeout(Math.min(perModelMs, left))
-      });
-    } catch (e) {
-      lastError = `${m}: ${e.message}`;
-      continue;
-    }
-    calls++;
-    const body = await res.json().catch(() => ({}));
-    if (res.status === 500) internalErrors++;
-    if (!res.ok) {
-      lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
-      if (!isKeyError(res.status, body.error?.message)) continue;
-      throw new Error(lastError);
-    }
-    try {
-      const result = parseGeminiTranscript(body);
-      if (!result.segments.length && !clip) throw new Error("Gemini returned an empty transcript");
-      return result;
-    } catch (e) {
-      lastError = `${m}: ${e.message}`;
-    }
-  }
-  if (clip && clip.start > 0 && calls > 0 && internalErrors === calls) throw new PastEndError();
-  throw new Error(lastError || "Gemini is unavailable");
-}
-var PastEndError = class extends Error {
-  constructor() {
-    super("past the end of the video");
-  }
-};
-function videoPart(id, clip) {
-  const part = {
-    file_data: { file_uri: youtubeWatchUrl(id) }
-  };
-  part.video_metadata = clip ? {
-    start_offset: `${Math.floor(clip.start)}s`,
-    end_offset: `${Math.ceil(clip.end)}s`,
-    fps: 0.2
-  } : { fps: 0.2 };
-  return part;
-}
-function toSeconds(v) {
-  if (typeof v === "number") return Number.isFinite(v) && v > 0 ? v : 0;
-  if (typeof v !== "string") return 0;
-  const t = v.trim();
-  if (/^\d+(?:\.\d+)?$/.test(t)) return Number(t);
-  if (/^\d{1,2}(?::\d{1,2}){1,2}(?:\.\d+)?$/.test(t))
-    return t.split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0);
-  return 0;
-}
-function parseGeminiTranscript(body) {
-  const parts = body.candidates?.[0]?.content?.parts ?? [];
-  const raw = parts.filter((p) => !p.thought).map((p) => p.text ?? "").join("").trim();
-  let parsed = void 0;
-  const shapes = [raw, raw.replace(/^```(?:json)?\s*|\s*```$/g, ""), raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1)];
-  for (const candidate of shapes) {
-    if (!candidate) continue;
-    try {
-      parsed = JSON.parse(candidate);
-      break;
-    } catch {
-    }
-  }
-  if (parsed === void 0 || parsed === null) throw new Error("Gemini returned an unreadable transcript");
-  const rows = Array.isArray(parsed) ? parsed : Object.values(parsed).find(Array.isArray) ?? [];
-  const segments = rows.map((r) => r).filter((r) => typeof r.text === "string" && r.text.trim()).map((r) => ({
-    start: toSeconds(r.t ?? r.start),
-    dur: 0,
-    text: String(r.text).trim()
-  })).sort((a, b) => a.start - b.start);
-  const sample = segments.slice(0, 20).map((s) => s.text).join(" ");
-  const lang = (sample.match(/[\u0600-\u06FF]/g) ?? []).length > (sample.match(/[A-Za-z]/g) ?? []).length ? "ar" : "en";
-  return { segments, lang, source: "gemini" };
-}
-async function getTranscript(id, tracks, keys, fetchImpl = fetch, deadline = Date.now() + 18e3, opts = {}) {
+async function getTranscript(id, tracks, keys, fetchImpl = fetch, deadline = Date.now() + 18e3) {
   const attempts = [];
   const sources = [];
   if (tracks.length) sources.push(["youtube", () => fromYouTube(tracks, fetchImpl)]);
-  if (keys.gemini_key && !opts.skipGemini) {
-    sources.push(["gemini", () => fromGemini(id, keys.gemini_key, keys.gemini_model || DEFAULT_GEMINI_MODEL, fetchImpl)]);
-  }
   if (keys.supadata_key) sources.push(["supadata", () => fromSupadata(id, keys.supadata_key, fetchImpl)]);
   if (keys.ytio_key) sources.push(["youtube-transcript.io", () => fromYoutubeTranscriptIo(id, keys.ytio_key, fetchImpl)]);
   for (const [source, run] of sources) {
@@ -734,12 +622,12 @@ async function sharedSecret(db, name) {
   return error || typeof data !== "string" || !data ? null : data;
 }
 async function userKeys(db, userId) {
-  const { data } = await db.from("user_settings").select("supadata_key, ytio_key, gemini_key, gemini_model").eq("user_id", userId).maybeSingle();
+  const { data } = await db.from("user_settings").select("supadata_key, ytio_key, gemini_key").eq("user_id", userId).maybeSingle();
   return {
     supadata_key: data?.supadata_key ?? null,
     ytio_key: data?.ytio_key ?? null,
-    gemini_key: data?.gemini_key || await sharedSecret(db, "gemini_api_key"),
-    gemini_model: data?.gemini_model ?? null
+    // Google AI Studio key, used for Gemma 4 summaries (the column predates the switch from Gemini).
+    google_ai_key: data?.gemini_key || await sharedSecret(db, "gemini_api_key")
   };
 }
 async function insertLinks(db, userId, itemId2, links) {
@@ -764,7 +652,7 @@ async function resolveTranscript(db, userId, youtubeId, video, manualTranscript,
     const text3 = (segments.length ? segmentsToText(segments) : manualTranscript.trim()).slice(0, MAX_TRANSCRIPT_CHARS);
     return { segments, text: text3, lang: guessLang(text3), source: "manual", attempts: [] };
   }
-  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl, void 0, { skipGemini: true });
+  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
   const attempts = video.captionsError ? [{ source: "youtube", error: video.captionsError }, ...t.attempts] : t.attempts;
   if (!t.result) return { segments: [], text: null, lang: null, source: null, attempts };
   const text2 = segmentsToText(t.result.segments).slice(0, MAX_TRANSCRIPT_CHARS);
@@ -926,7 +814,7 @@ async function storeTranscript(db, userId, itemId2, t, opts = {}) {
   return text2;
 }
 async function requestReanalysis(db, itemId2) {
-  const { data } = await db.from("items").update({ analyzed_at: null, analysis_attempts: 0 }).eq("id", itemId2).eq("analyzed_by", "gemini").not("analyzed_at", "is", null).select("status");
+  const { data } = await db.from("items").update({ analyzed_at: null, analysis_attempts: 0 }).eq("id", itemId2).eq("analyzed_by", "gemma").not("analyzed_at", "is", null).select("status");
   if (!data?.length) return;
   ok(await db.from("items").update({ status: "fetched" }).eq("id", itemId2).eq("status", "analyzed"), "requeue");
   ok(await db.from("video_details").update({ auto_next_at: null }).eq("item_id", itemId2), "release");
@@ -956,7 +844,7 @@ async function saveAnalysis(db, userId, input, by = "claude") {
     patch.error = null;
   }
   if (a.title) patch.title = a.title;
-  if (by === "gemini") {
+  if (by === "gemma") {
     const { data, error } = await db.from("items").update(patch).eq("id", item.id).is("analyzed_at", null).select("id");
     if (error) throw new Error(`save summary: ${error.message}`);
     if (!data?.length) return { ok: true, item_id: item.id, skipped: "already analysed" };
@@ -1179,8 +1067,8 @@ var SERVER_INFO = { name: "refvault", title: "RefVault", version: "0.1.0" };
 var INSTRUCTIONS = `RefVault is the user's personal reference library (YouTube videos today; wikis and courses later).
 The user saves videos so they never lose the links, tools and ideas mentioned in them. Content is English and Arabic.
 
-Everything is automatic: after a video is saved, RefVault fetches the transcript in the background (the user's PC helper or Gemini)
-and Gemini writes the summary, topics and link labels within a few minutes. Your analysis is better, so when you can, write it yourself:
+Everything is automatic: after a video is saved, RefVault fetches the transcript in the background (the user's PC helper or a
+transcript API) and Gemma 4 writes the summary, topics and link labels within a few minutes. Your analysis is better, so when you can, write it yourself:
 
 When the user gives you a YouTube link to save:
 1. Call add_video. It stores metadata, description, transcript and every URL found in the description/captions.
@@ -1544,79 +1432,49 @@ async function handleMcpHttp(req, ctx) {
 }
 
 // server/auto.ts
-var CHUNK_SEC = 600;
-var MAX_CHUNKS = 36;
+var GEMMA_MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
 var BACKOFF_MIN = [1, 3, 10, 30, 60, 180, 360, 720];
 var later = (attempt) => new Date(Date.now() + BACKOFF_MIN[Math.min(attempt, BACKOFF_MIN.length - 1)] * 6e4).toISOString();
-async function transcribeStep(db, userId, itemId2, fetchImpl = fetch, timeoutMs = 1e5) {
+var isKeyError = (status, message = "") => status === 401 || status === 403 || status === 400 && /api key/i.test(message);
+async function transcribeStep(db, userId, itemId2, fetchImpl = fetch) {
   const vd = must(
-    await db.from("video_details").select("youtube_id, duration_sec, transcript, transcript_segments, transcript_cursor, auto_attempts, end_signals").eq("item_id", itemId2).single(),
+    await db.from("video_details").select("youtube_id, transcript, auto_attempts").eq("item_id", itemId2).single(),
     "load video"
   );
   if (vd.transcript) return "done";
   const keys = await userKeys(db, userId);
   const attempts = vd.auto_attempts ?? 0;
-  if (!keys.gemini_key) {
-    await giveUp(db, itemId2, attempts, "No transcript: add a Gemini key in Settings, run the PC helper, or paste the transcript.");
+  if (!keys.supadata_key && !keys.ytio_key) {
+    await giveUp(
+      db,
+      itemId2,
+      attempts,
+      "No transcript yet: add a Supadata or youtube-transcript.io key in Settings, run the PC helper, or paste the transcript."
+    );
     return "gave_up";
   }
-  const start = vd.transcript_cursor ?? 0;
-  const duration = vd.duration_sec || null;
-  const signals = vd.end_signals ?? 0;
-  const done = (vd.transcript_segments ?? []).filter((s) => s.start < start);
-  const finish = async () => {
-    if (!done.length) {
-      await giveUp(db, itemId2, attempts, "Gemini found no speech in this video. You can paste a transcript instead.");
-      return "gave_up";
-    }
-    await storeTranscript(db, userId, itemId2, { segments: done, lang: null, source: "gemini" }, { onlyIfEmpty: true });
+  const t = await getTranscript(vd.youtube_id, [], keys, fetchImpl, Date.now() + 6e4);
+  if (t.result?.segments.length) {
+    await storeTranscript(
+      db,
+      userId,
+      itemId2,
+      { segments: t.result.segments, lang: t.result.lang, source: t.result.source },
+      { onlyIfEmpty: true }
+    );
     return "done";
-  };
-  if (duration && start >= duration || start >= CHUNK_SEC * MAX_CHUNKS) return finish();
-  const whole = !!duration && duration <= CHUNK_SEC && start === 0;
-  const end = duration ? Math.min(start + CHUNK_SEC, duration) : start + CHUNK_SEC;
-  let segments;
-  try {
-    const r = await fromGemini(
-      vd.youtube_id,
-      keys.gemini_key,
-      keys.gemini_model || DEFAULT_GEMINI_MODEL,
-      fetchImpl,
-      timeoutMs,
-      Math.min(6e4, timeoutMs),
-      whole ? void 0 : { start, end }
-    );
-    let raw = r.segments;
-    if (!whole && start > 0 && raw.length && raw.every((s) => s.start < start - 2)) {
-      raw = raw.map((s) => ({ ...s, start: s.start + start }));
-    }
-    segments = whole ? raw : raw.filter((s) => s.start >= start - 2 && s.start < end + 2);
-  } catch (e) {
-    if (e instanceof PastEndError && !duration) {
-      if (signals + 1 >= 2) return finish();
-      ok(
-        await db.from("video_details").update({ end_signals: signals + 1, auto_next_at: new Date(Date.now() + 6e4).toISOString() }).eq("item_id", itemId2),
-        "note end"
-      );
-      return "retry";
-    }
-    const next = attempts + 1;
-    ok(
-      await db.from("video_details").update({ auto_attempts: next, auto_next_at: later(next) }).eq("item_id", itemId2),
-      "schedule retry"
-    );
-    const msg = `${WAITING_MESSAGE} (last try: ${e.message.slice(0, 200)})`;
-    ok(await db.from("items").update({ error: msg }).eq("id", itemId2).eq("status", "transcript_pending"), "note error");
-    return "retry";
   }
-  done.push(...segments);
-  if (whole) return finish();
-  const nextSignals = segments.length ? 0 : signals + 1;
-  const { data: saved, error } = await db.from("video_details").update({ transcript_segments: done, transcript_cursor: end, end_signals: nextSignals, auto_next_at: null }).eq("item_id", itemId2).is("transcript", null).select("item_id");
-  if (error) throw new Error(`save transcript part: ${error.message}`);
-  if (!saved?.length) return "done";
-  if (duration && end >= duration || nextSignals >= 2) return finish();
-  return "more";
+  const next = attempts + 1;
+  ok(
+    await db.from("video_details").update({ auto_attempts: next, auto_next_at: later(next) }).eq("item_id", itemId2),
+    "schedule retry"
+  );
+  const why = t.attempts.map((a) => `${a.source}: ${a.error}`).join(" \xB7 ");
+  ok(
+    await db.from("items").update({ error: `${WAITING_MESSAGE}${why ? ` (last try: ${why.slice(0, 200)})` : ""}` }).eq("id", itemId2).eq("status", "transcript_pending"),
+    "note error"
+  );
+  return "retry";
 }
 async function giveUp(db, itemId2, attempts, message) {
   ok(
@@ -1642,7 +1500,8 @@ synonym. Never include an existing topic only because it is in the list \u2014 e
 mentions = things said out loud or shown without a link. Use the [123s] markers for timestamp_sec.
 Give EVERY saved link a label. Never invent URLs.`;
 var fence = (t) => t.replace(/<\/?video>/gi, "");
-async function analyzeWithGemini(input, apiKey, fetchImpl = fetch, models = ["gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"]) {
+async function analyzeWithGemma(input, apiKey, fetchImpl = fetch, models = GEMMA_MODELS, budgetMs = 85e3) {
+  const stopAt = Date.now() + budgetMs;
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,
     `SAVED LINKS:
@@ -1657,8 +1516,10 @@ TRANSCRIPT:
 ${fence(input.transcript.slice(0, 15e4)) || "(no transcript)"}
 </video>`
   ].join("\n\n");
-  let lastError = "Gemini is unavailable";
+  let lastError = "Gemma is unavailable";
   for (const m of models) {
+    const left = stopAt - Date.now();
+    if (left < 1e4) break;
     let res;
     try {
       res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
@@ -1669,7 +1530,8 @@ ${fence(input.transcript.slice(0, 15e4)) || "(no transcript)"}
           contents: [{ role: "user", parts: [{ text: material }] }],
           generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
         }),
-        signal: AbortSignal.timeout(45e3)
+        // Gemma thinks before answering; a long transcript can take a minute.
+        signal: AbortSignal.timeout(Math.min(75e3, left))
       });
     } catch (e) {
       lastError = `${m}: ${e.message}`;
@@ -1677,7 +1539,7 @@ ${fence(input.transcript.slice(0, 15e4)) || "(no transcript)"}
     }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
+      lastError = `Gemma ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
       if (!isKeyError(res.status, body.error?.message)) continue;
       throw new Error(lastError);
     }
@@ -1693,14 +1555,14 @@ ${fence(input.transcript.slice(0, 15e4)) || "(no transcript)"}
   }
   throw new Error(lastError);
 }
-async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
+async function analyzeStep(db, userId, itemId2, fetchImpl = fetch, budgetMs = 85e3) {
   const item = must(
     await db.from("items").select("id, title, status, analyzed_at, analysis_attempts").eq("id", itemId2).eq("user_id", userId).single(),
     "load item"
   );
   if (item.analyzed_at) return "done";
   const keys = await userKeys(db, userId);
-  if (!keys.gemini_key) {
+  if (!keys.google_ai_key) {
     ok(await db.from("items").update({ analysis_attempts: 5 }).eq("id", itemId2), "stop analysis");
     return "gave_up";
   }
@@ -1713,7 +1575,7 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
   const segs = vd.transcript_segments ?? [];
   const transcript = segs.length ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n") : vd.transcript ?? "";
   try {
-    const analysis = await analyzeWithGemini(
+    const analysis = await analyzeWithGemma(
       {
         title: item.title,
         channel: vd.channel,
@@ -1722,8 +1584,10 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
         links,
         topics: topics.map((t) => t.name)
       },
-      keys.gemini_key,
-      fetchImpl
+      keys.google_ai_key,
+      fetchImpl,
+      GEMMA_MODELS,
+      budgetMs
     );
     delete analysis.extra_links;
     const known = new Set(links.map((l) => l.url));
@@ -1735,7 +1599,7 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
         );
       }
     }
-    await saveAnalysis(db, userId, { ...analysis, item_id: itemId2 }, "gemini");
+    await saveAnalysis(db, userId, { ...analysis, item_id: itemId2 }, "gemma");
     return "done";
   } catch (e) {
     const next = (item.analysis_attempts ?? 0) + 1;
@@ -1757,7 +1621,7 @@ async function runWorker(db, budgetMs = 12e4, fetchImpl = fetch) {
     if (error) throw new Error(`claim jobs: ${error.message}`);
     if (!jobs?.length) break;
     for (const job of jobs) {
-      if (Date.now() > stopAt - (job.kind === "transcript" ? 65e3 : 5e4)) {
+      if (Date.now() > stopAt - (job.kind === "transcript" ? 7e4 : 9e4)) {
         await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
         outOfTime = true;
         continue;
@@ -1765,12 +1629,12 @@ async function runWorker(db, budgetMs = 12e4, fetchImpl = fetch) {
       try {
         let result;
         if (job.kind === "transcript") {
-          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl, Math.min(1e5, stopAt - Date.now() - 1e4));
-          if (result === "more" || result === "done") {
+          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl);
+          if (result === "done") {
             await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
           }
         } else {
-          result = await analyzeStep(db, job.user_id, job.item_id, fetchImpl);
+          result = await analyzeStep(db, job.user_id, job.item_id, fetchImpl, stopAt - Date.now() - 1e4);
         }
         log.push({ item_id: job.item_id, kind: job.kind, result });
       } catch (e) {

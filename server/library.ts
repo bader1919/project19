@@ -39,16 +39,12 @@ async function sharedSecret(db: Db, name: string): Promise<string | null> {
 }
 
 export async function userKeys(db: Db, userId: string) {
-  const { data } = await db
-    .from("user_settings")
-    .select("supadata_key, ytio_key, gemini_key, gemini_model")
-    .eq("user_id", userId)
-    .maybeSingle();
+  const { data } = await db.from("user_settings").select("supadata_key, ytio_key, gemini_key").eq("user_id", userId).maybeSingle();
   return {
     supadata_key: data?.supadata_key ?? null,
     ytio_key: data?.ytio_key ?? null,
-    gemini_key: data?.gemini_key || (await sharedSecret(db, "gemini_api_key")),
-    gemini_model: data?.gemini_model ?? null,
+    // Google AI Studio key, used for Gemma 4 summaries (the column predates the switch from Gemini).
+    google_ai_key: data?.gemini_key || (await sharedSecret(db, "gemini_api_key")),
   };
 }
 
@@ -107,8 +103,7 @@ async function resolveTranscript(
     const text = (segments.length ? segmentsToText(segments) : manualTranscript.trim()).slice(0, MAX_TRANSCRIPT_CHARS);
     return { segments, text, lang: guessLang(text), source: "manual", attempts: [] };
   }
-  // Gemini can take minutes on a long video, so the background worker runs it (server/auto.ts).
-  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl, undefined, { skipGemini: true });
+  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
   const attempts = video.captionsError ? [{ source: "youtube", error: video.captionsError }, ...t.attempts] : t.attempts;
   if (!t.result) return { segments: [], text: null, lang: null, source: null, attempts };
   const text = segmentsToText(t.result.segments).slice(0, MAX_TRANSCRIPT_CHARS);
@@ -152,7 +147,7 @@ function guessLang(text: string): string | null {
   return arabic > latin ? "ar" : "en";
 }
 
-/** Shown while the PC helper / Gemini fetch the transcript in the background. */
+/** Shown while the PC helper / transcript services fetch the transcript in the background. */
 export const WAITING_MESSAGE = "Getting the transcript automatically in the background — this usually takes a minute or two.";
 
 /** Save a YouTube video: metadata, description, transcript, links, chapters. */
@@ -342,14 +337,14 @@ export async function storeTranscript(
 
 /**
  * Re-run the automatic analysis when better material (transcript, description) arrives
- * later. Only touches Gemini's own analysis — never one Claude wrote.
+ * later. Only touches the automatic (Gemma) analysis — never one Claude wrote.
  */
 export async function requestReanalysis(db: Db, itemId: string) {
   const { data } = await db
     .from("items")
     .update({ analyzed_at: null, analysis_attempts: 0 })
     .eq("id", itemId)
-    .eq("analyzed_by", "gemini")
+    .eq("analyzed_by", "gemma")
     .not("analyzed_at", "is", null)
     .select("status");
   if (!data?.length) return;
@@ -382,7 +377,7 @@ export async function applyMetadata(db: Db, userId: string, itemId: string, m: V
 export type AnalysisInput = { item_id: string } & Record<string, unknown>;
 
 /** Store the AI's analysis of an item (called by Claude through MCP). */
-export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput, by: "claude" | "gemini" = "claude") {
+export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput, by: "claude" | "gemma" = "claude") {
   const item = await ownedItem(db, userId, input.item_id);
   const a = cleanAnalysis(input);
 
@@ -398,7 +393,7 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
     patch.error = null;
   }
   if (a.title) patch.title = a.title;
-  if (by === "gemini") {
+  if (by === "gemma") {
     // The automatic analysis never overwrites one Claude (or the user) saved meanwhile.
     const { data, error } = await db.from("items").update(patch).eq("id", item.id).is("analyzed_at", null).select("id");
     if (error) throw new Error(`save summary: ${error.message}`);
@@ -441,7 +436,7 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
     );
   }
 
-  // A new analysis (Claude's, or Gemini redoing its own with better material) replaces the old topics.
+  // A new analysis (Claude's, or Gemma redoing its own with better material) replaces the old topics.
   if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
   return {
     ok: true,

@@ -1,132 +1,78 @@
 /**
  * The automatic pipeline. After a video is saved, nothing needs a human:
- *   1. transcript — the user's PC helper sends captions (server/helper.ts); if it can't
- *      (PC off, no captions) Gemini watches the video, in 10-minute parts for long videos.
- *   2. analysis — Gemini writes the summary, key points, topics, link labels and mentions.
+ *   1. transcript — YouTube's captions on save; the user's PC helper (server/helper.ts);
+ *      then the transcript APIs (Supadata, youtube-transcript.io), retried with back-off.
+ *   2. analysis — Gemma 4 writes the summary, key points, topics, link labels and mentions.
  * pg_cron calls the worker every minute (migration 004); requests also kick it directly.
  */
 import type { TranscriptSegment } from "../shared/types";
 import { must, ok, type Db } from "./db";
 import { saveAnalysis, storeTranscript, userKeys, WAITING_MESSAGE } from "./library";
-import { DEFAULT_GEMINI_MODEL, fromGemini, isKeyError, PastEndError } from "./transcript";
+import { getTranscript } from "./transcript";
 
 type Fetch = typeof fetch;
 
-/** Length of one Gemini transcription part. */
-export const CHUNK_SEC = 600;
-/** Longest video transcribed automatically (6 hours). */
-export const MAX_CHUNKS = 36;
+/** Gemma 4 on the Google AI Studio API (text only — Gemma can't take video or audio). */
+export const GEMMA_MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
 /** Minutes to wait before the next background try, by attempt number. */
 const BACKOFF_MIN = [1, 3, 10, 30, 60, 180, 360, 720];
 
 const later = (attempt: number) => new Date(Date.now() + BACKOFF_MIN[Math.min(attempt, BACKOFF_MIN.length - 1)] * 60_000).toISOString();
 
+/** A bad or blocked key fails the same on every model; anything else may be model-specific. */
+export const isKeyError = (status: number, message = "") =>
+  status === 401 || status === 403 || (status === 400 && /api key/i.test(message));
+
 export type StepResult = "done" | "more" | "retry" | "gave_up";
 
-/**
- * Transcribe the next part of a video with Gemini. Partial results are saved after every
- * part, so a long video survives function time limits and finishes over several runs.
- */
-export async function transcribeStep(
-  db: Db,
-  userId: string,
-  itemId: string,
-  fetchImpl: Fetch = fetch,
-  timeoutMs = 100_000,
-): Promise<StepResult> {
+/** Fetch the transcript from the transcript APIs (YouTube blocks the server itself). */
+export async function transcribeStep(db: Db, userId: string, itemId: string, fetchImpl: Fetch = fetch): Promise<StepResult> {
   const vd = must(
-    await db
-      .from("video_details")
-      .select("youtube_id, duration_sec, transcript, transcript_segments, transcript_cursor, auto_attempts, end_signals")
-      .eq("item_id", itemId)
-      .single(),
+    await db.from("video_details").select("youtube_id, transcript, auto_attempts").eq("item_id", itemId).single(),
     "load video",
   );
   if (vd.transcript) return "done";
   const keys = await userKeys(db, userId);
   const attempts = (vd.auto_attempts as number) ?? 0;
-  if (!keys.gemini_key) {
-    await giveUp(db, itemId, attempts, "No transcript: add a Gemini key in Settings, run the PC helper, or paste the transcript.");
+  if (!keys.supadata_key && !keys.ytio_key) {
+    await giveUp(
+      db,
+      itemId,
+      attempts,
+      "No transcript yet: add a Supadata or youtube-transcript.io key in Settings, run the PC helper, or paste the transcript.",
+    );
     return "gave_up";
   }
-
-  const start = (vd.transcript_cursor as number) ?? 0;
-  const duration = (vd.duration_sec as number | null) || null;
-  const signals = (vd.end_signals as number) ?? 0;
-  const done = ((vd.transcript_segments ?? []) as TranscriptSegment[]).filter((s) => s.start < start);
-  const finish = async () => {
-    if (!done.length) {
-      await giveUp(db, itemId, attempts, "Gemini found no speech in this video. You can paste a transcript instead.");
-      return "gave_up" as const;
-    }
+  const t = await getTranscript(vd.youtube_id, [], keys, fetchImpl, Date.now() + 60_000);
+  if (t.result?.segments.length) {
     // Only if nothing better arrived meanwhile (PC helper captions, a pasted transcript).
-    await storeTranscript(db, userId, itemId, { segments: done, lang: null, source: "gemini" }, { onlyIfEmpty: true });
-    return "done" as const;
-  };
-  if ((duration && start >= duration) || start >= CHUNK_SEC * MAX_CHUNKS) return finish();
-
-  // A short video whose length we know goes in one call; otherwise one 10-minute part.
-  const whole = !!duration && duration <= CHUNK_SEC && start === 0;
-  const end = duration ? Math.min(start + CHUNK_SEC, duration) : start + CHUNK_SEC;
-  let segments: TranscriptSegment[];
-  try {
-    const r = await fromGemini(
-      vd.youtube_id,
-      keys.gemini_key,
-      keys.gemini_model || DEFAULT_GEMINI_MODEL,
-      fetchImpl,
-      timeoutMs,
-      Math.min(60_000, timeoutMs),
-      whole ? undefined : { start, end },
+    await storeTranscript(
+      db,
+      userId,
+      itemId,
+      { segments: t.result.segments, lang: t.result.lang, source: t.result.source },
+      { onlyIfEmpty: true },
     );
-    let raw = r.segments;
-    // Some models count from the start of the part instead of the video: shift those.
-    if (!whole && start > 0 && raw.length && raw.every((s) => s.start < start - 2)) {
-      raw = raw.map((s) => ({ ...s, start: s.start + start }));
-    }
-    // Keep only this part (models sometimes repeat a line from before the cut).
-    segments = whole ? raw : raw.filter((s) => s.start >= start - 2 && s.start < end + 2);
-  } catch (e) {
-    // Past the end of a video of unknown length. A real outage looks the same, so it
-    // takes two signs a minute apart before the transcript is considered complete.
-    if (e instanceof PastEndError && !duration) {
-      if (signals + 1 >= 2) return finish();
-      ok(
-        await db
-          .from("video_details")
-          .update({ end_signals: signals + 1, auto_next_at: new Date(Date.now() + 60_000).toISOString() })
-          .eq("item_id", itemId),
-        "note end",
-      );
-      return "retry";
-    }
-    const next = attempts + 1;
-    ok(
-      await db
-        .from("video_details")
-        .update({ auto_attempts: next, auto_next_at: later(next) })
-        .eq("item_id", itemId),
-      "schedule retry",
-    );
-    const msg = `${WAITING_MESSAGE} (last try: ${(e as Error).message.slice(0, 200)})`;
-    ok(await db.from("items").update({ error: msg }).eq("id", itemId).eq("status", "transcript_pending"), "note error");
-    return "retry";
+    return "done";
   }
-
-  done.push(...segments);
-  if (whole) return finish();
-  // Two empty parts in a row (or past the known length) = the end; one may just be music.
-  const nextSignals = segments.length ? 0 : signals + 1;
-  const { data: saved, error } = await db
-    .from("video_details")
-    .update({ transcript_segments: done, transcript_cursor: end, end_signals: nextSignals, auto_next_at: null })
-    .eq("item_id", itemId)
-    .is("transcript", null)
-    .select("item_id");
-  if (error) throw new Error(`save transcript part: ${error.message}`);
-  if (!saved?.length) return "done"; // a transcript arrived from elsewhere meanwhile
-  if ((duration && end >= duration) || nextSignals >= 2) return finish();
-  return "more";
+  const next = attempts + 1;
+  ok(
+    await db
+      .from("video_details")
+      .update({ auto_attempts: next, auto_next_at: later(next) })
+      .eq("item_id", itemId),
+    "schedule retry",
+  );
+  const why = t.attempts.map((a) => `${a.source}: ${a.error}`).join(" · ");
+  ok(
+    await db
+      .from("items")
+      .update({ error: `${WAITING_MESSAGE}${why ? ` (last try: ${why.slice(0, 200)})` : ""}` })
+      .eq("id", itemId)
+      .eq("status", "transcript_pending"),
+    "note error",
+  );
+  return "retry";
 }
 
 async function giveUp(db: Db, itemId: string, attempts: number, message: string) {
@@ -157,7 +103,7 @@ synonym. Never include an existing topic only because it is in the list — each
 mentions = things said out loud or shown without a link. Use the [123s] markers for timestamp_sec.
 Give EVERY saved link a label. Never invent URLs.`;
 
-interface GeminiTextReply {
+interface GemmaReply {
   candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] } }[];
   error?: { message?: string };
 }
@@ -165,8 +111,8 @@ interface GeminiTextReply {
 /** Video text must not be able to close the <video> block it sits in. */
 const fence = (t: string) => t.replace(/<\/?video>/gi, "");
 
-/** Ask Gemini (text only — fast and cheap) for the analysis of an item. */
-export async function analyzeWithGemini(
+/** Ask Gemma 4 (text only) for the analysis of an item. */
+export async function analyzeWithGemma(
   input: {
     title: string;
     channel: string | null;
@@ -177,15 +123,20 @@ export async function analyzeWithGemini(
   },
   apiKey: string,
   fetchImpl: Fetch = fetch,
-  models = ["gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"],
+  models = GEMMA_MODELS,
+  /** Total time for all models together (the worker passes what's left of its run). */
+  budgetMs = 85_000,
 ): Promise<Record<string, unknown>> {
+  const stopAt = Date.now() + budgetMs;
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,
     `SAVED LINKS:\n${input.links.map((l) => `- ${l.url}${l.context ? ` — ${l.context.slice(0, 160)}` : ""}`).join("\n") || "(none)"}`,
     `<video>\nTITLE: ${fence(input.title)}\nCHANNEL: ${fence(input.channel ?? "")}\nDESCRIPTION:\n${fence((input.description ?? "").slice(0, 8000))}\n\nTRANSCRIPT:\n${fence(input.transcript.slice(0, 150_000)) || "(no transcript)"}\n</video>`,
   ].join("\n\n");
-  let lastError = "Gemini is unavailable";
+  let lastError = "Gemma is unavailable";
   for (const m of models) {
+    const left = stopAt - Date.now();
+    if (left < 10_000) break;
     let res: Response;
     try {
       res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
@@ -196,15 +147,16 @@ export async function analyzeWithGemini(
           contents: [{ role: "user", parts: [{ text: material }] }],
           generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
         }),
-        signal: AbortSignal.timeout(45_000),
+        // Gemma thinks before answering; a long transcript can take a minute.
+        signal: AbortSignal.timeout(Math.min(75_000, left)),
       });
     } catch (e) {
       lastError = `${m}: ${(e as Error).message}`;
       continue;
     }
-    const body = (await res.json().catch(() => ({}))) as GeminiTextReply;
+    const body = (await res.json().catch(() => ({}))) as GemmaReply;
     if (!res.ok) {
-      lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
+      lastError = `Gemma ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
       if (!isKeyError(res.status, body.error?.message)) continue;
       throw new Error(lastError);
     }
@@ -226,14 +178,20 @@ export async function analyzeWithGemini(
 }
 
 /** Write the automatic analysis for one item. */
-export async function analyzeStep(db: Db, userId: string, itemId: string, fetchImpl: Fetch = fetch): Promise<StepResult> {
+export async function analyzeStep(
+  db: Db,
+  userId: string,
+  itemId: string,
+  fetchImpl: Fetch = fetch,
+  budgetMs = 85_000,
+): Promise<StepResult> {
   const item = must(
     await db.from("items").select("id, title, status, analyzed_at, analysis_attempts").eq("id", itemId).eq("user_id", userId).single(),
     "load item",
   );
   if (item.analyzed_at) return "done";
   const keys = await userKeys(db, userId);
-  if (!keys.gemini_key) {
+  if (!keys.google_ai_key) {
     // Nothing to analyse with: stop asking (Claude can still analyse it through the connector).
     ok(await db.from("items").update({ analysis_attempts: 5 }).eq("id", itemId), "stop analysis");
     return "gave_up";
@@ -247,7 +205,7 @@ export async function analyzeStep(db: Db, userId: string, itemId: string, fetchI
   const segs = (vd.transcript_segments ?? []) as TranscriptSegment[];
   const transcript = segs.length ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n") : (vd.transcript ?? "");
   try {
-    const analysis = await analyzeWithGemini(
+    const analysis = await analyzeWithGemma(
       {
         title: item.title,
         channel: vd.channel,
@@ -256,10 +214,12 @@ export async function analyzeStep(db: Db, userId: string, itemId: string, fetchI
         links: links as { url: string; context: string | null }[],
         topics: (topics as { name: string }[]).map((t) => t.name),
       },
-      keys.gemini_key,
+      keys.google_ai_key,
       fetchImpl,
+      GEMMA_MODELS,
+      budgetMs,
     );
-    // Gemini doesn't add new links on its own (it can't check them, and the video text could
+    // Gemma doesn't add new links on its own (it can't check them, and the video text could
     // try to plant some): keep only URLs that were already saved for this video.
     delete analysis.extra_links;
     const known = new Set((links as { url: string }[]).map((l) => l.url));
@@ -271,7 +231,7 @@ export async function analyzeStep(db: Db, userId: string, itemId: string, fetchI
         );
       }
     }
-    await saveAnalysis(db, userId, { ...analysis, item_id: itemId }, "gemini");
+    await saveAnalysis(db, userId, { ...analysis, item_id: itemId }, "gemma");
     return "done";
   } catch (e) {
     const next = ((item.analysis_attempts as number) ?? 0) + 1;
@@ -301,8 +261,8 @@ export async function runWorker(db: Db, budgetMs = 120_000, fetchImpl: Fetch = f
     if (error) throw new Error(`claim jobs: ${error.message}`);
     if (!jobs?.length) break;
     for (const job of jobs as { item_id: string; user_id: string; kind: string }[]) {
-      // Not enough time left for a Gemini call: hand the lease back for the next run.
-      if (Date.now() > stopAt - (job.kind === "transcript" ? 65_000 : 50_000)) {
+      // Not enough time left for this step: hand the lease back for the next run.
+      if (Date.now() > stopAt - (job.kind === "transcript" ? 70_000 : 90_000)) {
         await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
         outOfTime = true;
         continue;
@@ -310,14 +270,14 @@ export async function runWorker(db: Db, budgetMs = 120_000, fetchImpl: Fetch = f
       try {
         let result: StepResult;
         if (job.kind === "transcript") {
-          // Never run past the function's own time limit (Gemini gets what's left, minus a margin).
-          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl, Math.min(100_000, stopAt - Date.now() - 10_000));
-          // Release the lease so the next part (or the analysis) is picked up right away.
-          if (result === "more" || result === "done") {
+          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl);
+          // Release the lease so the analysis is picked up right away.
+          if (result === "done") {
             await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
           }
         } else {
-          result = await analyzeStep(db, job.user_id, job.item_id, fetchImpl);
+          // Never run past the function's own time limit (Gemma gets what's left, minus a margin).
+          result = await analyzeStep(db, job.user_id, job.item_id, fetchImpl, stopAt - Date.now() - 10_000);
         }
         log.push({ item_id: job.item_id, kind: job.kind, result });
       } catch (e) {

@@ -114,7 +114,7 @@ export async function helperResult(db: Db, userId: string, body: Record<string, 
   }
 
   const patch: Record<string, unknown> = { helper_done: true };
-  // No captions from the PC either: Gemini takes over right away.
+  // No captions from the PC either: the transcript services take over right away.
   if (transcript === "missing") Object.assign(patch, { pc_failed: true, auto_next_at: null });
   ok(await db.from("video_details").update(patch).eq("item_id", itemId), "update video");
   if (transcript === "missing" && typeof body.error === "string") {

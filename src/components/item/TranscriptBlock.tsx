@@ -49,7 +49,7 @@ function MissingPanel({ item, segCount, onChanged }: { item: ItemFull; segCount:
         )}
         {item.error && !message && <p className="mt-1 text-meta text-ink-2">{item.error}</p>}
         <p className="mt-1 text-meta text-ink-2">
-          Your PC helper (Settings) fetches YouTube's captions; when your computer is off, Gemini watches the video instead. This page updates by itself.
+          Your PC helper (Settings) fetches YouTube's captions; when your computer is off, the transcript services in Settings do it instead. This page updates by itself.
         </p>
       </div>
       <button type="button" className="btn-outline" onClick={() => retry()} disabled={busy} aria-busy={busy}>

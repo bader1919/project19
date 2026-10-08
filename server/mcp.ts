@@ -28,8 +28,8 @@ export const SERVER_INFO = { name: "refvault", title: "RefVault", version: "0.1.
 export const INSTRUCTIONS = `RefVault is the user's personal reference library (YouTube videos today; wikis and courses later).
 The user saves videos so they never lose the links, tools and ideas mentioned in them. Content is English and Arabic.
 
-Everything is automatic: after a video is saved, RefVault fetches the transcript in the background (the user's PC helper or Gemini)
-and Gemini writes the summary, topics and link labels within a few minutes. Your analysis is better, so when you can, write it yourself:
+Everything is automatic: after a video is saved, RefVault fetches the transcript in the background (the user's PC helper or a
+transcript API) and Gemma 4 writes the summary, topics and link labels within a few minutes. Your analysis is better, so when you can, write it yourself:
 
 When the user gives you a YouTube link to save:
 1. Call add_video. It stores metadata, description, transcript and every URL found in the description/captions.
