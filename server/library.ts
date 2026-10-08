@@ -38,7 +38,7 @@ async function sharedSecret(db: Db, name: string): Promise<string | null> {
   return error || typeof data !== "string" || !data ? null : data;
 }
 
-async function userKeys(db: Db, userId: string) {
+export async function userKeys(db: Db, userId: string) {
   const { data } = await db
     .from("user_settings")
     .select("supadata_key, ytio_key, gemini_key, gemini_model")
@@ -99,7 +99,8 @@ async function resolveTranscript(
     const text = (segments.length ? segmentsToText(segments) : manualTranscript.trim()).slice(0, MAX_TRANSCRIPT_CHARS);
     return { segments, text, lang: guessLang(text), source: "manual", attempts: [] };
   }
-  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl);
+  // Gemini can take minutes on a long video, so the background worker runs it (server/auto.ts).
+  const t = await getTranscript(youtubeId, video.captionTracks, await userKeys(db, userId), fetchImpl, undefined, { skipGemini: true });
   const attempts = video.captionsError ? [{ source: "youtube", error: video.captionsError }, ...t.attempts] : t.attempts;
   if (!t.result) return { segments: [], text: null, lang: null, source: null, attempts };
   const text = segmentsToText(t.result.segments).slice(0, MAX_TRANSCRIPT_CHARS);
@@ -132,8 +133,8 @@ function guessLang(text: string): string | null {
   return arabic > latin ? "ar" : "en";
 }
 
-const describeAttempts = (attempts: TranscriptAttempt[]) =>
-  attempts.map((a) => `${a.source}: ${a.error}`).join(" · ") || "No transcript source available";
+/** Shown while the PC helper / Gemini fetch the transcript in the background. */
+export const WAITING_MESSAGE = "Getting the transcript automatically in the background — this usually takes a minute or two.";
 
 /** Save a YouTube video: metadata, description, transcript, links, chapters. */
 export async function ingestVideo(
@@ -191,7 +192,7 @@ export async function ingestVideo(
         title: meta.title || `YouTube video ${youtubeId}`,
         source_url: sourceUrl,
         status: t.text ? "fetched" : "transcript_pending",
-        error: t.text ? null : describeAttempts(t.attempts),
+        error: t.text ? null : WAITING_MESSAGE,
       })
       .select("id, title, status")
       .single(),
@@ -267,52 +268,73 @@ export async function retryTranscript(db: Db, userId: string, itemId: string, ma
   const video = manualTranscript?.trim() && vd.description ? null : await fetchVideo(vd.youtube_id, fetchImpl);
 
   // Repair metadata that the oEmbed fallback could not provide on the first save.
-  if (video && !vd.description && video.meta.description) {
-    const m = video.meta;
-    ok(
-      await db
-        .from("video_details")
-        .update({
-          description: m.description,
-          duration_sec: m.duration_sec,
-          published_at: m.published_at,
-          channel_url: m.channel_url,
-          description_info: extractChapters(m.description),
-        })
-        .eq("item_id", itemId),
-      "update video details",
-    );
-    await insertLinks(db, userId, itemId, dedupeByUrl(await expandShortLinks(extractDescriptionLinks(m.description), fetchImpl)));
-  }
+  if (video && !vd.description && video.meta.description) await applyMetadata(db, userId, itemId, video.meta, fetchImpl);
 
   const t = video
     ? await resolveTranscript(db, userId, vd.youtube_id, video, manualTranscript, fetchImpl)
     : await resolveTranscript(db, userId, vd.youtube_id, { meta: {} as FetchedVideo["meta"], captionTracks: [] }, manualTranscript, fetchImpl);
 
   if (!t.text) {
-    const error = describeAttempts(t.attempts);
+    // Hand it to the background worker straight away (skip waiting for the PC helper).
+    ok(
+      await db.from("video_details").update({ pc_failed: true, auto_attempts: 0, auto_next_at: null }).eq("item_id", itemId),
+      "queue transcript",
+    );
     if (item.status !== "analyzed") {
-      ok(await db.from("items").update({ status: "transcript_pending", error }).eq("id", itemId), "update item");
+      ok(await db.from("items").update({ status: "transcript_pending", error: WAITING_MESSAGE }).eq("id", itemId), "update item");
     }
-    return { ok: false, error, attempts: t.attempts };
+    return { ok: false, queued: true, error: WAITING_MESSAGE, attempts: t.attempts };
   }
 
+  await storeTranscript(db, userId, itemId, { segments: t.segments, text: t.text, lang: t.lang, source: t.source ?? "manual" });
+  return { ok: true, source: t.source, length: t.text.length };
+}
+
+/** Save a finished transcript, pick up the links spoken in it, and mark the item ready for analysis. */
+export async function storeTranscript(
+  db: Db,
+  userId: string,
+  itemId: string,
+  t: { segments: TranscriptSegment[]; text?: string | null; lang: string | null; source: string },
+) {
+  const text = (t.text ?? segmentsToText(t.segments)).slice(0, MAX_TRANSCRIPT_CHARS);
   ok(
     await db
       .from("video_details")
-      .update({ transcript: t.text, transcript_segments: t.segments, transcript_lang: t.lang, transcript_source: t.source })
+      .update({ transcript: text, transcript_segments: t.segments, transcript_lang: t.lang ?? guessLang(text), transcript_source: t.source })
       .eq("item_id", itemId),
     "save transcript",
   );
   await insertLinks(db, userId, itemId, extractTranscriptLinks(t.segments));
   ok(await db.from("items").update({ status: "fetched", error: null }).eq("id", itemId).eq("status", "transcript_pending"), "update item");
-  return { ok: true, source: t.source, length: t.text.length };
+  return text;
+}
+
+export interface VideoMetadata {
+  description?: string | null;
+  duration_sec?: number | null;
+  published_at?: string | null;
+  channel_url?: string | null;
+}
+
+/** Fill in description, chapters and description links (when the first save only got basic metadata). */
+export async function applyMetadata(db: Db, userId: string, itemId: string, m: VideoMetadata, fetchImpl: Fetch = fetch) {
+  if (!m.description) return;
+  const { data: vd } = await db.from("video_details").select("description_info").eq("item_id", itemId).maybeSingle();
+  // Keep what an analysis already found; only the chapters come from the description itself.
+  const kept = ((vd?.description_info ?? []) as DescriptionInfo[]).filter((d) => d.kind !== "chapter");
+  const patch: Record<string, unknown> = { description: m.description, description_info: [...extractChapters(m.description), ...kept] };
+  if (m.duration_sec) patch.duration_sec = m.duration_sec;
+  if (m.published_at) patch.published_at = m.published_at;
+  if (m.channel_url) patch.channel_url = m.channel_url;
+  ok(await db.from("video_details").update(patch).eq("item_id", itemId), "update video details");
+  await insertLinks(db, userId, itemId, dedupeByUrl(await expandShortLinks(extractDescriptionLinks(m.description), fetchImpl)));
 }
 
 export type AnalysisInput = { item_id: string } & Record<string, unknown>;
 
 /** Store the AI's analysis of an item (called by Claude through MCP). */
-export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput) {
+export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput, by: "claude" | "gemini" = "claude") {
   const item = await ownedItem(db, userId, input.item_id);
   const a = cleanAnalysis(input);
 
@@ -320,6 +342,7 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput)
     summary: a.summary,
     key_points: a.key_points,
     analyzed_at: new Date().toISOString(),
+    analyzed_by: by,
   };
   // Keep the "why is the transcript missing" message until a transcript arrives.
   if (item.status !== "transcript_pending") {
@@ -327,7 +350,14 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput)
     patch.error = null;
   }
   if (a.title) patch.title = a.title;
-  ok(await db.from("items").update(patch).eq("id", item.id), "save summary");
+  if (by === "gemini") {
+    // The automatic analysis never overwrites one Claude (or the user) saved meanwhile.
+    const { data, error } = await db.from("items").update(patch).eq("id", item.id).is("analyzed_at", null).select("id");
+    if (error) throw new Error(`save summary: ${error.message}`);
+    if (!data?.length) return { ok: true, item_id: item.id, skipped: "already analysed" };
+  } else {
+    ok(await db.from("items").update(patch).eq("id", item.id), "save summary");
+  }
 
   if (item.type === "video" && (a.description_info || a.mentions)) {
     const vd = must(

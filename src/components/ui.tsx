@@ -41,8 +41,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   analyzed: { label: "Analyzed", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
-  fetched: { label: "Needs analysis", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  transcript_pending: { label: "No transcript", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
+  fetched: { label: "Summarizing…", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  transcript_pending: { label: "Getting transcript…", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
   error: { label: "Error", cls: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
 };
 

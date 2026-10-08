@@ -315,9 +315,9 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
     setBusy(true);
     setMessage(null);
     try {
-      const r = await api<{ ok: boolean; error?: string }>("/ingest", { body: { item_id: item.id, transcript } });
-      if (r.ok) onChanged();
-      else setMessage(r.error ?? "Still no transcript");
+      const r = await api<{ ok: boolean; queued?: boolean; error?: string }>("/ingest", { body: { item_id: item.id, transcript } });
+      if (r.ok || r.queued) onChanged();
+      if (!r.ok) setMessage(r.queued ? "Started — the transcript is being made in the background." : (r.error ?? "Still no transcript"));
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
@@ -328,9 +328,18 @@ function TranscriptTab({ item, onSeek, onChanged }: { item: ItemFull; onSeek: (s
   if (!item.video?.transcript) {
     return (
       <div className="card space-y-3 p-4 text-sm sm:p-5">
-        <p>No transcript yet.{item.error && !message && <span className="block text-xs text-slate-500">{item.error}</span>}</p>
+        <p>
+          {(item.video?.auto_attempts ?? 0) < 8 ? "Getting the transcript automatically…" : "No transcript yet."}
+          {!!item.video?.transcript_cursor && segs.length > 0 && (
+            <span className="block text-xs text-slate-500">
+              Long video — transcribed the first {Math.round(item.video.transcript_cursor / 60)} minutes so far.
+            </span>
+          )}
+          {item.error && !message && <span className="block text-xs text-slate-500">{item.error}</span>}
+        </p>
         <p className="text-xs text-slate-500">
-          Tip: add a free Gemini key in Settings — Gemini watches the video itself, so it can transcribe videos YouTube blocks or that have no captions.
+          Your PC helper (Settings) fetches YouTube's captions; when your computer is off, Gemini watches the video instead. This page updates by
+          itself.
         </p>
         <button className="btn-outline" onClick={() => retry()} disabled={busy}>
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Try again
@@ -520,6 +529,12 @@ function CollectionsEditor({ item, onChanged }: { item: ItemFull; onChanged: () 
   );
 }
 
+/** Still being transcribed or summarized automatically. */
+function isWorking(item: ItemFull): boolean {
+  if (item.status === "transcript_pending") return (item.video?.auto_attempts ?? 0) < 8 || (!item.analyzed_at && (item.analysis_attempts ?? 0) < 5);
+  return item.status === "fetched" && !item.analyzed_at && (item.analysis_attempts ?? 0) < 5;
+}
+
 export function ItemPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -527,6 +542,14 @@ export function ItemPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [start, setStart] = useState<number | null>(null);
   const playerRef = useRef<HTMLDivElement>(null);
+
+  // The transcript and summary are made in the background: refresh until they're in.
+  const working = !!item && isWorking(item);
+  useEffect(() => {
+    if (!working) return;
+    const t = setInterval(reload, 10_000);
+    return () => clearInterval(t);
+  }, [working, reload]);
 
   const seek = (sec: number) => {
     setStart(sec);

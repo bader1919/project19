@@ -32,7 +32,7 @@ export function Home() {
       {stats.data && (
         <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat icon={PlaySquare} label="Saved items" value={stats.data.items} to="/library" />
-          <Stat icon={Sparkles} label="Waiting for analysis" value={stats.data.pending} to="/library?status=fetched" />
+          <Stat icon={Sparkles} label="Being summarized" value={stats.data.pending} to="/library?status=fetched" />
           <Stat icon={Link2} label="Links kept" value={stats.data.links} to="/links" />
           <Stat icon={NotebookPen} label="Notes" value={stats.data.notes} to="/notes" />
         </div>
@@ -41,8 +41,8 @@ export function Home() {
       {(pending.data?.length ?? 0) > 0 && (
         <section className="mb-8">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">Needs analysis</h2>
-            <p className="text-xs text-slate-500">Ask Claude: “Analyze my pending RefVault videos”</p>
+            <h2 className="font-semibold">Being summarized</h2>
+            <p className="text-xs text-slate-500">Automatic — ready in a minute or two</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {pending.data!.map((i) => <ItemCard key={i.id} item={i} />)}
@@ -52,7 +52,7 @@ export function Home() {
 
       {(noTranscript.data?.length ?? 0) > 0 && (
         <section className="mb-8">
-          <h2 className="mb-3 font-semibold">Missing transcript</h2>
+          <h2 className="mb-3 font-semibold">Getting transcript</h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {noTranscript.data!.map((i) => <ItemCard key={i.id} item={i} />)}
           </div>

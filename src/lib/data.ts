@@ -50,6 +50,9 @@ export interface VideoRow {
   transcript_source: string | null;
   description_info: DescriptionInfo[];
   mentions: Mention[];
+  /** Background pipeline (migration 004) */
+  auto_attempts?: number;
+  transcript_cursor?: number;
 }
 
 export interface ItemFull {
@@ -63,6 +66,8 @@ export interface ItemFull {
   error: string | null;
   created_at: string;
   analyzed_at: string | null;
+  analysis_attempts?: number;
+  analyzed_by?: string | null;
   video: VideoRow | null;
   links: LinkRow[];
   topics: { id: string; name: string }[];
@@ -104,7 +109,7 @@ export async function loadItem(id: string): Promise<ItemFull | null> {
   const item = check(
     await supabase
       .from("items")
-      .select("id, type, title, source_url, summary, key_points, status, error, created_at, analyzed_at")
+      .select("id, type, title, source_url, summary, key_points, status, error, created_at, analyzed_at, analysis_attempts, analyzed_by")
       .eq("id", id)
       .maybeSingle(),
   );

@@ -21,3 +21,10 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     X-Content-Type-Options = "nosniff"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# PC helper installer files are fetched by PowerShell / curl and read as text.
+[[headers]]
+  for = "/helper/*"
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
+    Cache-Control = "no-cache"

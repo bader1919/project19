@@ -11,8 +11,8 @@ const PAGE = 30;
 const STATUSES = [
   { value: "", label: "Any status" },
   { value: "analyzed", label: "Analyzed" },
-  { value: "fetched", label: "Needs analysis" },
-  { value: "transcript_pending", label: "No transcript" },
+  { value: "fetched", label: "Being summarized" },
+  { value: "transcript_pending", label: "Getting transcript" },
 ];
 
 /** Library browser; also serves module pages like /videos via `type`. */

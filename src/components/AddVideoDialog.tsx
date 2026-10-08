@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
+import { CheckCircle2, Loader2, X } from "lucide-react";
 import { parseYouTubeId } from "../../shared/youtube-url";
 import { api, type IngestResult } from "../lib/api";
 
@@ -106,29 +106,20 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
         ) : (
           <div className="space-y-4">
             <div className="flex gap-3">
-              {result.transcript_source || result.already_saved ? (
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
-              ) : (
-                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-              )}
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
               <div className="text-sm">
                 <p dir="auto" className="font-medium">{result.title}</p>
                 <p className="mt-1 text-slate-500">
                   {result.already_saved
                     ? "Already in your library."
                     : `Saved with ${result.link_count} link${result.link_count === 1 ? "" : "s"}. ${
-                        result.transcript_source ? `Transcript from ${result.transcript_source}.` : "Transcript could not be fetched yet."
+                        result.transcript_source ? `Transcript from ${result.transcript_source}.` : "The transcript is being fetched in the background."
                       }`}
                 </p>
-                {!result.already_saved && !result.transcript_source && result.transcript_errors.length > 0 && (
-                  <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-slate-500">
-                    {result.transcript_errors.map((e, i) => <li key={i}>{e.source}: {e.error}</li>)}
-                  </ul>
-                )}
               </div>
             </div>
             <div className="rounded-lg bg-brand-50 p-3 text-sm text-brand-700 dark:bg-brand-500/10 dark:text-brand-100">
-              Next: ask Claude <em>“Analyze my pending RefVault videos”</em> to add the summary, topics and link labels.
+              Nothing else to do — the summary, topics and link labels are added automatically in a minute or two.
             </div>
             <div className="flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => { setResult(null); setUrl(""); setTranscript(""); }}>Save another</button>
