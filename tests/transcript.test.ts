@@ -241,12 +241,12 @@ describe("fromGemini model fallback", () => {
       const model = u.match(/models\/([^:]+):/)![1];
       seen.push(model);
       if (model === "gemini-flash-lite-latest") return new Response(JSON.stringify({ error: { message: "high demand" } }), { status: 503 });
-      if (model === "gemini-flash-latest") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+      if (model === "gemini-3.5-flash") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '[{"t":0,"text":"ok"}]' }] } }] }));
     });
     const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
     expect(res.segments[0].text).toBe("ok");
-    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-flash-latest"]);
 
     const bad = vi.fn(async () => new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 }));
     await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, bad as unknown as typeof fetch)).rejects.toThrow(/400/);
@@ -285,7 +285,7 @@ describe("parseGeminiTranscript", () => {
     };
     const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
     expect(res.segments[0].text).toBe("ok");
-    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-3.5-flash"]);
   });
 
   it("moves on when a model hangs past its time slice", async () => {
@@ -300,6 +300,6 @@ describe("parseGeminiTranscript", () => {
     };
     const res = await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch, 60_000, 50);
     expect(res.segments[0].text).toBe("ok");
-    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-3.5-flash"]);
   });
 });

@@ -8,7 +8,7 @@
 import type { TranscriptSegment } from "../shared/types";
 import { must, ok, type Db } from "./db";
 import { saveAnalysis, storeTranscript, userKeys, WAITING_MESSAGE } from "./library";
-import { DEFAULT_GEMINI_MODEL, fromGemini, PastEndError } from "./transcript";
+import { DEFAULT_GEMINI_MODEL, fromGemini, isKeyError, PastEndError } from "./transcript";
 
 type Fetch = typeof fetch;
 
@@ -175,7 +175,7 @@ export async function analyzeWithGemini(
   },
   apiKey: string,
   fetchImpl: Fetch = fetch,
-  models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.5-flash"],
+  models = ["gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-flash-latest"],
 ): Promise<Record<string, unknown>> {
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,
@@ -203,7 +203,7 @@ export async function analyzeWithGemini(
     const body = (await res.json().catch(() => ({}))) as GeminiTextReply;
     if (!res.ok) {
       lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
-      if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
+      if (!isKeyError(res.status, body.error?.message)) continue;
       throw new Error(lastError);
     }
     const raw = (body.candidates?.[0]?.content?.parts ?? [])

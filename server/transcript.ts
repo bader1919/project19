@@ -20,7 +20,13 @@ export interface TranscriptKeys {
 // Flash-Lite is the fastest and least overloaded free model for transcription.
 export const DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest";
 // Gemma models cannot take video input, so they are not used here.
-export const GEMINI_FALLBACK_MODELS = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash"];
+export const GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash"];
+/** Models known to accept thinking off (faster; transcription needs no reasoning). Others reject the setting. */
+const THINKING_OFF = new Set(["gemini-3.5-flash"]);
+
+/** A bad or blocked key fails the same on every model; anything else may be model-specific. */
+export const isKeyError = (status: number, message = "") =>
+  status === 401 || status === 403 || (status === 400 && /api key/i.test(message));
 
 export interface TranscriptAttempt {
   source: string;
@@ -189,7 +195,12 @@ export async function fromGemini(
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ parts: [videoPart(id, clip), { text: GEMINI_PROMPT }] }],
-          generationConfig: { temperature: 0, responseMimeType: "application/json", mediaResolution: "MEDIA_RESOLUTION_LOW" },
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json",
+            mediaResolution: "MEDIA_RESOLUTION_LOW",
+            ...(THINKING_OFF.has(m) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+          },
         }),
         signal: AbortSignal.timeout(Math.min(perModelMs, left)),
       });
@@ -204,7 +215,8 @@ export async function fromGemini(
     if (!res.ok) {
       lastError = `Gemini ${res.status}${body.error?.message ? `: ${body.error.message}` : ""}`;
       // Overloaded, rate-limited, or retired for this key: try the next model.
-      if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
+      // Overloaded, rate-limited, retired, or a setting this model doesn't take: try the next one.
+      if (!isKeyError(res.status, body.error?.message)) continue;
       throw new Error(lastError);
     }
     try {

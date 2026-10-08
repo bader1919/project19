@@ -54,6 +54,30 @@ describe("fromGemini parts of long videos", () => {
     ).rejects.not.toBeInstanceOf(PastEndError);
   });
 
+  it("tries the next model when one rejects a setting (400), but not for a bad key", async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (u: string) => {
+      seen.push(u.match(/models\/([^:]+):/)![1]);
+      return seen.length === 1 ? reply("Request contains an invalid argument.", 400) : reply('[{"t": 0, "text": "ok"}]');
+    });
+    expect((await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch)).segments[0].text).toBe("ok");
+    expect(seen).toHaveLength(2);
+    const badKey = vi.fn(async () => reply("API key not valid. Please pass a valid API key.", 400));
+    await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, badKey as unknown as typeof fetch)).rejects.toThrow(/API key/);
+    expect(badKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns thinking off only for models that accept it", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_u: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return bodies.length === 1 ? reply("busy", 503) : reply('[{"t": 0, "text": "ok"}]');
+    });
+    await fromGemini("dQw4w9WgXcQ", "K", undefined, fetchImpl as unknown as typeof fetch);
+    expect((bodies[0].generationConfig as Record<string, unknown>).thinkingConfig).toBeUndefined(); // flash-lite
+    expect((bodies[1].generationConfig as Record<string, unknown>).thinkingConfig).toEqual({ thinkingBudget: 0 }); // 3.5-flash
+  });
+
   it("still rejects an empty transcript for a whole video", async () => {
     await expect(fromGemini("dQw4w9WgXcQ", "K", undefined, (async () => reply("[]")) as unknown as typeof fetch)).rejects.toThrow(/empty/);
   });
@@ -100,7 +124,7 @@ describe("analyzeWithGemini", () => {
     });
     const out = await analyzeWithGemini(input, "K", fetchImpl as unknown as typeof fetch);
     expect(out).toEqual({ summary: "S", topics: ["AI"] });
-    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-flash-latest"]);
+    expect(seen).toEqual(["gemini-flash-lite-latest", "gemini-3.5-flash"]);
   });
 
   it("marks the video text as third-party data and lists existing topics and links", async () => {
