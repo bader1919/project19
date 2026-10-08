@@ -329,6 +329,8 @@ Library                                   1 result
 - Duration shown bottom-end as a 13px `sheet` chip on the thumb.
 
 ### 2.9 Item page (page pattern: detail with sticky side rail)
+**Owner decision: item page has NO tabs — one continuous scrolling page (summary → links → mentions → chapters/description → transcript → notes) with a sticky in-page contents bar of anchor links.** (Overrides the tab wording in this section and in C3, C8, C9.)
+
 The reading comes first; the video is a sticky companion.
 
 ```
@@ -457,6 +459,8 @@ A6. **Shared UI** (`src/components/ui.tsx`, new files in `src/components/`):
 A7. **Keyboard**: global `/` focuses search, `n` opens Save, Esc closes sheets (in `AppShell`). Do not fire when typing in inputs.
 
 ### B. App shell, Home, Library, cards
+**Owner change to B6:** the Home hero is ONE smart input (label "Paste a YouTube link or search your library"): a YouTube link turns the button into "Save video" (POST /ingest, then navigate to /item/:id); anything else is "Search" (-> /library?q=). Implemented in `Home.tsx` `SmartInput`.
+
 B1. `src/layout/AppShell.tsx`: rewrite the structure to `div.grid.lg:grid-cols-[232px_1fr] min-h-dvh`; `aside` = `hidden lg:flex sticky top-0 h-dvh flex-col border-e border-line bg-paper overflow-y-auto`. Remove `fixed`, `lg:pl-64`, and the white backgrounds.
 B2. Sidebar: wordmark (serif 600, 20px) + inline SVG bookmark mark (replace `/icon.svg` image in the shell only; keep the file for PWA). Nav groups from `MAIN_NAV`, `MODULES`, `ORGANIZE_NAV` rendered with 24px gaps and no group labels (delete `section-title` paragraphs, "Content", "Organize"). `NavItem` classes: `flex items-center gap-3 ps-3 pe-3 h-10 rounded-ctl text-body`, active `bg-binding-wash text-binding font-medium border-s-2 border-binding`, inactive `text-ink-2 hover:bg-binding-wash/60`. Disabled modules: `<span aria-disabled>` with text "Wikis" and trailing plain "soon" in `text-small text-ink-2`.
 B3. Top area: replace `<header>` with a sticky 56px row inside `main`: `SearchBox` (max-w-list, placeholder "Search videos, links, transcripts, notes", `<kbd>/</kbd>` hint hidden on touch) + `Save video` primary button (hidden `<lg`). Remove backdrop-blur and the white bar.
@@ -468,6 +472,7 @@ B8. `src/pages/Library.tsx`: `PageHeader` title unchanged but subtitle becomes "
 B9. `Highlight` stays (`[[ ]]` parsing); `mark` style from A5.
 
 ### C. Item page (`src/pages/ItemPage.tsx`, 703 lines; split sub-components into `src/components/item/*` while keeping behaviour)
+**Owner decision: item page has NO tabs — one continuous scrolling page (summary → links → mentions → chapters/description → transcript → notes) with a sticky in-page contents bar of anchor links.**
 C1. Layout: `grid lg:grid-cols-[minmax(0,680px)_392px] gap-12 max-w-item mx-auto`. Right rail `lg:sticky lg:top-20 self-start space-y-8`: `PlayerBox` (video frame `rounded-frame overflow-hidden`, keep `playerRef` and the YouTube IFrame API setup untouched), `TimelineStrip`, "Open on YouTube", `NotesBox`, `CollectionsBox`. On `<lg`, order via CSS `order`: header, player+strip, tabs/content, notes, collections.
 C2. `TimelineStrip.tsx`: props `duration` (from `video.duration_sec`), `chapters` (existing parsed chapters), `links` (with `timestamp_sec`), `mentions` (with timestamp field), `onSeek`. Render `div[role=group][aria-label="Timeline"]` 10px tall, segments `bg-line`, ticks `.bg-marker` (links 14px tall, mentions 8px), buttons positioned with `left: pct%` (use `inset-inline-start` for RTL-safe, but the timeline direction stays LTR: set `dir="ltr"` on the strip). Each tick is a `<button>` with `aria-label="Play from 12:40, pgvector GitHub repo"` and a 24px hit area; tooltip on hover/focus. Hidden when no duration or no markers.
 C3. Header block (replace badges + h1 stack): back link ("Library" with arrow icon, uses `navigate(-1)`), `h1.text-title font-serif dir=auto`, meta line (no dots), topics chips with inline add (move `TopicsBox` input into an expandable chip; keep `removeTopic`/`addTopic` calls), status bar for `fetched`/`transcript_pending` ("Summarizing. This page fills in by itself, usually within two minutes."; `role=status`), no "Analyzed" badge.
@@ -498,3 +503,35 @@ D8. **States.** Standard copy (use consistently):
 - Error (save): "Couldn't save this link. It isn't a YouTube video URL. Paste a link like youtube.com/watch?v=…".
 - Pending states per 2.9 and Home "Still processing".
 D9. **Cleanup and checks.** `grep -rn "card\|brand-\|slate-\|text-xs\|text-\[1\|uppercase\| · " src` must return only intentional hits; run `npm run build`; re-shoot `before` set as `after` (desktop/mobile, light/dark); verify: no horizontal scroll at 375, all tap targets >= 44px mobile, contrast tokens, keyboard path (`/`, Tab order, Esc in sheets), Arabic item page mirrors rows, thumbnail failure shows the fallback, reduced-motion turns off the pulse.
+
+---------------------------------------------------------------------------------------------------
+## 5. Components (groups A and B, implemented)
+
+Import paths are relative to `src/`. Tokens and classes live in `src/index.css` and `tailwind.config.js`.
+
+**CSS classes** (`index.css`): `.btn`, `.btn-primary`, `.btn-outline`, `.btn-ghost`, `.btn-danger`, `.btn-danger-solid` (44px touch / 40px from `sm`);
+`.btn-sm` (add to any button: 44px touch / 32px desktop); `.icon-btn` (square 44/32); `.input` (also textarea); `.chip` (use on span, a or button);
+`.row` (list row: bottom hairline, py-4); `.sheet` (raised surface); `.popover` (floating surface with shadow); `.locator`; `.skeleton`; `mark`; `.num` (tabular figures).
+Type utilities: `text-display|title|h2|lead|read|body|meta|small`. Colours: `paper sheet pop ink ink-2 line binding on-binding binding-wash marker marker-ink danger warn-bg warn-ink`.
+Radius: `rounded-tab` (4), `rounded-ctl` (8), `rounded-frame` (12). Widths: `max-w-prose|list|item`. Legacy to delete after C/D: `.card`, `.section-title`, `brand-*` colours, `StatusBadge`, `PageHeader subtitle`, `EmptyState icon`.
+
+**`lib/format.ts`**: `formatTimestamp(sec)` -> "1:02:03"; `formatDate(iso)` -> "7 Oct" (year added if not current); `timeAgo(iso)` -> "5m ago", "3h ago", "yesterday", then a date. (`timeAgo` is still re-exported from `components/ui`.)
+
+**`components/ui.tsx`**
+- `Spinner({ label? })` inline busy indicator (not for lists).
+- `ErrorBox({ message, onRetry? })` danger row; `onRetry` shows "Try again".
+- `EmptyState({ title, children?, action? })` heading + sentence + action node (`icon` ignored, legacy).
+- `PageHeader({ title, meta?, actions? })` serif title, one meta line, right-aligned actions (`subtitle` = legacy alias of `meta`).
+- `StatusNote({ status, long? })` text with dot for fetched / transcript_pending / error; renders nothing for analyzed. `long` adds the expected wait.
+- `Highlight({ text })` renders `[[match]]` as `<mark>`.
+
+**`components/Thumb.tsx`** `Thumb({ src?, title, channel?, duration?, className? })` image with designed fallback (initial letter on `binding-wash`). Size via `className` (default `aspect-video w-full`); `duration` seconds shows a chip.
+**`components/Locator.tsx`** `Locator({ sec, onSeek?, to?, label?, className? })` yellow timestamp tab. `onSeek` -> button; `to` -> router link; neither -> static. Renders nothing when `sec` is null.
+**`components/Skeleton.tsx`** `Skeleton({ className })`, `SkeletonRows({ n=6, thumb=true, delay=300 })` (appears only after `delay` ms).
+**`components/IconButton.tsx`** `IconButton({ label, shortcut?, children, ...buttonProps })` aria-label + title, 44px touch / 32px desktop.
+**`components/Menu.tsx`** `Menu({ label, trigger, items, align?='start'|'end', triggerClassName?='icon-btn' })`, `items: { label, onSelect, icon?, danger?, checked?, disabled? }[]`. Arrow keys, Esc, focus restore; `checked` makes it a radio list.
+**`components/Sheet.tsx`** `Sheet({ title, onClose, children, placement?='auto'|'center'|'full', dismissible?=true, role?, hideTitle? })` modal with focus trap/restore and scroll lock; render only while open. Put `data-autofocus` on the control that should get focus first.
+**`components/ConfirmDialog.tsx`** `ConfirmDialog({ title, body?, confirmLabel, cancelLabel?, danger?, onConfirm, onClose })` replaces `window.confirm`; Cancel is focused; `onConfirm` may be async, dialog closes on resolve and shows thrown errors. Render only while open (`{target && <ConfirmDialog/>}`); name the entity in `title`.
+**`components/ItemRow.tsx`** `ItemRow({ item: SearchRow, showSnippet? })` library/search/home row (replaces `ItemCard`). `SearchRow.duration_sec` is filled by `searchItems`.
+**`components/AddVideoDialog.tsx`** `AddVideoDialog({ initialText?, onClose })` Save sheet (also used by the `/add` share route).
+**`SiteIcon.tsx`** unchanged (legacy coloured initials; D1 removes its use).
