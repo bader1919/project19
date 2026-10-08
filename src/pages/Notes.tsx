@@ -1,37 +1,52 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { NotebookPen } from "lucide-react";
 import { listNotes } from "../lib/data";
 import { useAsync } from "../lib/useAsync";
-import { EmptyState, ErrorBox, PageHeader, Spinner, timeAgo } from "../components/ui";
+import { useDebounced } from "../lib/useDebounced";
+import { EmptyState, ErrorBox, PageHeader, timeAgo } from "../components/ui";
+import { SkeletonRows } from "../components/Skeleton";
+import { SearchField } from "../components/SearchField";
 
 export function Notes() {
   const [q, setQ] = useState("");
-  const [query, setQuery] = useState("");
+  const query = useDebounced(q.trim());
   const notes = useAsync(() => listNotes(query), [query]);
+  const rows = (notes.data ?? []).filter((n) => n.body.trim());
 
   return (
-    <div>
-      <PageHeader title="Notes" subtitle="Everything you've written, newest first." />
-      <form className="mb-5 flex gap-2" onSubmit={(e) => (e.preventDefault(), setQuery(q.trim()))}>
-        <input dir="auto" className="input max-w-md" placeholder="Search your notes…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search notes" />
-        <button className="btn-outline">Search</button>
-      </form>
-      {notes.loading ? (
-        <Spinner />
-      ) : notes.error ? (
-        <ErrorBox message={notes.error} />
-      ) : !notes.data!.filter((n) => n.body.trim()).length ? (
-        <EmptyState icon={<NotebookPen className="h-10 w-10" />} title="No notes yet">Open any item and write in “My notes”.</EmptyState>
+    <div className="max-w-list">
+      <PageHeader title="Notes" meta={notes.data ? `${rows.length} ${rows.length === 1 ? "note" : "notes"}, newest first` : undefined} />
+      <SearchField label="Search your notes" placeholder="Search your notes" value={q} onChange={setQ} className="mb-4 w-full sm:w-80" />
+
+      {notes.error && !notes.data ? (
+        <ErrorBox message="Couldn't load your notes. Check your connection and try again." onRetry={notes.reload} />
+      ) : notes.loading && !notes.data ? (
+        <SkeletonRows thumb={false} />
+      ) : rows.length === 0 ? (
+        query ? (
+          <EmptyState title={`No notes match “${query}”`} action={<button type="button" className="btn-outline" onClick={() => setQ("")}>Clear search</button>}>
+            Search covers the text of your notes. Try one word.
+          </EmptyState>
+        ) : (
+          <EmptyState title="No notes yet" action={<Link to="/library" className="btn-primary">Open your library</Link>}>
+            Notes you write on a video page show up here. Open a video and add one.
+          </EmptyState>
+        )
       ) : (
-        <div className="space-y-3">
-          {notes.data!.filter((n) => n.body.trim()).map((n) => (
-            <Link key={n.id} to={`/item/${n.item_id}`} className="card block p-4 transition hover:shadow-md">
-              <p dir="auto" className="line-clamp-4 whitespace-pre-line text-sm">{n.body}</p>
-              <p className="mt-2 text-xs text-slate-500" dir="auto">{n.items.title} · {timeAgo(n.updated_at)}</p>
-            </Link>
+        <ul>
+          {rows.map((n) => (
+            <li key={n.id} className="row">
+              <Link to={`/item/${n.item_id}`} className="group block">
+                <p dir="auto" className="line-clamp-3 whitespace-pre-line font-serif text-read">{n.body}</p>
+                <p className="mt-1.5 text-meta text-ink-2">
+                  <span dir="auto" className="group-hover:text-binding group-hover:underline">{n.items.title}</span>
+                  {", "}
+                  {timeAgo(n.updated_at)}
+                </p>
+              </Link>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );

@@ -1,6 +1,15 @@
 import { useState } from "react";
-import { LogIn, Mail } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import { ErrorBox } from "../components/ui";
+
+function Mark({ className = "h-7 w-7" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path d="M5 2.5h14a1 1 0 0 1 1 1V22l-8-5-8 5V3.5a1 1 0 0 1 1-1z" fill="currentColor" />
+      <path d="M10 7.5v6l5-3z" fill="rgb(var(--paper))" />
+    </svg>
+  );
+}
 
 export function Login() {
   const [mode, setMode] = useState<"password" | "link">("password");
@@ -11,22 +20,22 @@ export function Login() {
   const [busy, setBusy] = useState(false);
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="card w-full max-w-sm p-6">
-        <div className="mb-6 flex items-center gap-3">
-          <img src="/icon.svg" alt="" className="h-10 w-10" />
-          <div>
-            <h1 className="text-xl font-semibold">RefVault</h1>
-            <p className="text-sm text-slate-500">Never lose a reference from a video again.</p>
+    <main className="flex min-h-dvh justify-center bg-paper px-4 pb-10 pt-[12vh]">
+      <div className="w-full max-w-[360px]">
+        <div className="mb-8 text-binding">
+          <div className="flex items-center gap-2.5">
+            <Mark />
+            <h1 className="text-[1.75rem] font-semibold leading-9 text-ink">RefVault</h1>
           </div>
+          <p className="mt-3 text-body text-ink-2">Find the link, book or idea you saw in a video.</p>
         </div>
         {sent ? (
-          <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-            Check <strong>{email}</strong> for a sign-in link.
+          <p role="status" className="sheet px-4 py-3 text-body">
+            Check <strong dir="ltr">{email}</strong> for a sign-in link. It can take a minute to arrive.
           </p>
         ) : (
           <form
-            className="space-y-3"
+            className="space-y-4"
             onSubmit={async (e) => {
               e.preventDefault();
               setBusy(true);
@@ -40,21 +49,23 @@ export function Login() {
               else if (mode === "link") setSent(true);
             }}
           >
-            <label htmlFor="email" className="block text-sm font-medium">Email</label>
-            <input id="email" type="email" required autoComplete="username" className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            <div>
+              <label htmlFor="email" className="mb-1 block text-meta font-semibold text-ink-2">Email</label>
+              <input id="email" type="email" required autoComplete="username" className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+            </div>
             {mode === "password" && (
-              <>
-                <label htmlFor="password" className="block text-sm font-medium">Password</label>
+              <div>
+                <label htmlFor="password" className="mb-1 block text-meta font-semibold text-ink-2">Password</label>
                 <input id="password" type="password" required autoComplete="current-password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} />
-              </>
+              </div>
             )}
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <ErrorBox message={error} />}
             <button className="btn-primary w-full" disabled={busy}>
-              {mode === "password" ? <><LogIn className="h-4 w-4" /> Sign in</> : <><Mail className="h-4 w-4" /> Email me a sign-in link</>}
+              {busy ? "Signing in…" : mode === "password" ? "Sign in" : "Email me a sign-in link"}
             </button>
             <button
               type="button"
-              className="w-full text-center text-xs text-brand-600 hover:underline"
+              className="btn-ghost w-full"
               onClick={() => (setMode(mode === "password" ? "link" : "password"), setError(null))}
             >
               {mode === "password" ? "Use an email link instead" : "Use a password instead"}
@@ -68,15 +79,15 @@ export function Login() {
 
 export function NotConfigured() {
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="card max-w-lg p-6 text-sm">
-        <h1 className="mb-2 text-lg font-semibold">Almost there</h1>
-        <p className="text-slate-600 dark:text-slate-300">
-          RefVault needs its Supabase connection. In Netlify → Site configuration → Environment variables, set
-          <code className="mx-1 rounded bg-slate-100 px-1 dark:bg-slate-800">VITE_SUPABASE_URL</code> and
-          <code className="mx-1 rounded bg-slate-100 px-1 dark:bg-slate-800">VITE_SUPABASE_ANON_KEY</code>, then redeploy. See the README for the full steps.
+    <main className="flex min-h-dvh justify-center bg-paper px-4 pt-[12vh]">
+      <div className="sheet h-fit max-w-lg p-6 text-body">
+        <h1 className="mb-2 text-h2">Almost there</h1>
+        <p className="text-ink-2">
+          RefVault needs its Supabase connection. In Netlify, open Site configuration, then Environment variables, and set
+          <code className="mx-1 rounded-tab bg-binding-wash px-1 text-meta">VITE_SUPABASE_URL</code> and
+          <code className="mx-1 rounded-tab bg-binding-wash px-1 text-meta">VITE_SUPABASE_ANON_KEY</code>, then redeploy. The README has the full steps.
         </p>
       </div>
-    </div>
+    </main>
   );
 }
