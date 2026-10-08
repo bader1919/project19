@@ -13,6 +13,7 @@
   --ink: 22 32 42;
   --ink-2: 75 88 99;
   --line: 216 222 218;
+  --control: 130 141 136; /* form field borders: 3:1 against paper and sheet (WCAG 1.4.11) */
   --binding: 23 102 90;
   --on-binding: 255 255 255;
   --binding-wash: 225 239 234;
@@ -30,6 +31,7 @@
     --ink: 231 237 233;
     --ink-2: 162 176 184;
     --line: 42 53 59;
+    --control: 96 110 117;
     --binding: 116 205 180;
     --on-binding: 11 21 19;
     --binding-wash: 28 47 44;
@@ -71,7 +73,7 @@
   /* Square icon-only button; 44px touch, 32px desktop. Prefer <IconButton>. */
   .icon-btn { @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-ctl text-ink-2 transition-colors duration-100 hover:bg-binding-wash hover:text-ink disabled:opacity-50 sm:h-8 sm:w-8; }
 
-  .input { @apply min-h-[44px] w-full rounded-ctl border border-line bg-sheet px-3 text-body placeholder:text-ink-2/70 sm:min-h-[40px]; }
+  .input { @apply min-h-[44px] w-full rounded-ctl border border-control bg-sheet px-3 text-body placeholder:text-ink-2/70 sm:min-h-[40px]; }
   textarea.input { @apply py-2; }
   .chip { @apply inline-flex items-center gap-1 rounded-tab bg-binding-wash px-2 py-0.5 text-small text-ink; }
   a.chip, button.chip { @apply hover:underline; }

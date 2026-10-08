@@ -18,6 +18,7 @@ export default {
         ink: token("ink"),
         "ink-2": token("ink-2"),
         line: token("line"),
+        control: token("control"),
         binding: token("binding"),
         "on-binding": token("on-binding"),
         "binding-wash": token("binding-wash"),
