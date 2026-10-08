@@ -104,7 +104,7 @@ export function Home() {
 
   return (
     <div className="max-w-list">
-      <h1 className="text-display max-sm:text-[1.75rem] max-sm:leading-9">What are you trying to find?</h1>
+      <h1 className="text-display max-sm:text-[1.75rem] max-sm:leading-9">Save a video, or find one you saved</h1>
       <SmartInput />
 
       <div className="mt-4 space-y-1 text-meta text-ink-2">
