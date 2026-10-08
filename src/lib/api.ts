@@ -5,7 +5,7 @@ import { supabase } from "./supabase";
  * (VITE_API_BASE=https://<project>.supabase.co/functions/v1/refvault) or the
  * Netlify functions under /api during local development.
  */
-export const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || "/api").replace(/\/+$/, "");
+const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || "/api").replace(/\/+$/, "");
 
 /** Call the RefVault API ("/ingest", "/token") with the signed-in user's session. */
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {

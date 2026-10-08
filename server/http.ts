@@ -40,22 +40,32 @@ export async function handleIngest(req: Request): Promise<Response> {
 }
 
 /** POST creates a connector token (shown once, stored hashed) · DELETE revokes all of them */
-export async function handleToken(req: Request, mcpBase: string): Promise<Response> {
+export async function handleToken(req: Request, mcpBase: string, helperBase: string): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   try {
     const db = adminDb();
     const userId = await userFromRequest(db, req);
     if (req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { label?: string };
+      const body = (await req.json().catch(() => ({}))) as { label?: string; scope?: string };
+      const scope = body.scope === "helper" ? "helper" : "mcp";
       const token = newToken();
       ok(
-        await db.from("api_tokens").insert({ user_id: userId, token_hash: hashToken(token), label: body.label ?? "Claude connector" }),
+        await db.from("api_tokens").insert({
+          user_id: userId,
+          token_hash: hashToken(token),
+          scope,
+          label: body.label ?? (scope === "helper" ? "PC helper" : "Claude connector"),
+        }),
         "save token",
       );
-      return withCors(json({ token, url: `${mcpBase}/${token}` }));
+      return withCors(json({ token, url: scope === "helper" ? `${helperBase}/${token}` : `${mcpBase}/${token}` }));
     }
     if (req.method === "DELETE") {
-      ok(await db.from("api_tokens").delete().eq("user_id", userId), "revoke tokens");
+      // ?scope=mcp revokes only Claude connectors (keeps the PC helper running), and vice versa.
+      const scope = new URL(req.url).searchParams.get("scope");
+      let del = db.from("api_tokens").delete().eq("user_id", userId);
+      if (scope === "mcp" || scope === "helper") del = del.eq("scope", scope);
+      ok(await del, "revoke tokens");
       return withCors(json({ ok: true }));
     }
     throw new HttpError(405, "Use POST or DELETE");
@@ -73,7 +83,7 @@ export function handleMcp(req: Request, token: string | undefined): Promise<Resp
 export async function handleHelper(req: Request, token: string, action: string): Promise<Response> {
   try {
     const db = adminDb();
-    const userId = await userFromToken(db, token);
+    const userId = await userFromToken(db, token, "helper");
     if (action === "jobs" && req.method === "GET") return json(await helperJobs(db, userId));
     if (action === "result" && req.method === "POST") {
       const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;

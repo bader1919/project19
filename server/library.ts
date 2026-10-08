@@ -56,7 +56,15 @@ async function insertLinks(
   db: Db,
   userId: string,
   itemId: string,
-  links: { url: string; domain: string; context: string; source: string; timestamp_sec: number | null; original_url?: string | null; label?: string | null }[],
+  links: {
+    url: string;
+    domain: string;
+    context: string;
+    source: string;
+    timestamp_sec: number | null;
+    original_url?: string | null;
+    label?: string | null;
+  }[],
 ) {
   if (!links.length) return;
   const rows = links.map((l) => ({
@@ -112,14 +120,25 @@ async function resolveTranscript(
  * "0:00\ntext" or "0:00 text" per line. Keep those timestamps so lines stay clickable.
  */
 export function parsePastedTranscript(raw: string): TranscriptSegment[] {
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   const TS = /^((?:\d{1,2}:)?\d{1,2}:\d{2})(?:\s+(.*))?$/;
   const stamped = lines.filter((l) => TS.test(l)).length;
   if (stamped < 2 || stamped < lines.length * 0.3) return [];
   const segs: TranscriptSegment[] = [];
   for (const line of lines) {
     const m = line.match(TS);
-    if (m) segs.push({ start: m[1].split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0), dur: 0, text: m[2] ?? "" });
+    if (m)
+      segs.push({
+        start: m[1]
+          .split(":")
+          .map(Number)
+          .reduce((acc, n) => acc * 60 + n, 0),
+        dur: 0,
+        text: m[2] ?? "",
+      });
     else if (segs.length) segs[segs.length - 1].text = `${segs[segs.length - 1].text} ${line}`.trim();
   }
   return segs.filter((s) => s.text);
@@ -272,7 +291,14 @@ export async function retryTranscript(db: Db, userId: string, itemId: string, ma
 
   const t = video
     ? await resolveTranscript(db, userId, vd.youtube_id, video, manualTranscript, fetchImpl)
-    : await resolveTranscript(db, userId, vd.youtube_id, { meta: {} as FetchedVideo["meta"], captionTracks: [] }, manualTranscript, fetchImpl);
+    : await resolveTranscript(
+        db,
+        userId,
+        vd.youtube_id,
+        { meta: {} as FetchedVideo["meta"], captionTracks: [] },
+        manualTranscript,
+        fetchImpl,
+      );
 
   if (!t.text) {
     // Hand it to the background worker straight away (skip waiting for the PC helper).
@@ -296,18 +322,40 @@ export async function storeTranscript(
   userId: string,
   itemId: string,
   t: { segments: TranscriptSegment[]; text?: string | null; lang: string | null; source: string },
-) {
+  opts: { onlyIfEmpty?: boolean } = {},
+): Promise<string | null> {
   const text = (t.text ?? segmentsToText(t.segments)).slice(0, MAX_TRANSCRIPT_CHARS);
-  ok(
-    await db
-      .from("video_details")
-      .update({ transcript: text, transcript_segments: t.segments, transcript_lang: t.lang ?? guessLang(text), transcript_source: t.source })
-      .eq("item_id", itemId),
-    "save transcript",
-  );
+  let q = db
+    .from("video_details")
+    .update({ transcript: text, transcript_segments: t.segments, transcript_lang: t.lang ?? guessLang(text), transcript_source: t.source })
+    .eq("item_id", itemId);
+  if (opts.onlyIfEmpty) q = q.is("transcript", null);
+  const { data: saved, error } = await q.select("item_id");
+  if (error) throw new Error(`save transcript: ${error.message}`);
+  if (!saved?.length) return null; // another source got there first
   await insertLinks(db, userId, itemId, extractTranscriptLinks(t.segments));
   ok(await db.from("items").update({ status: "fetched", error: null }).eq("id", itemId).eq("status", "transcript_pending"), "update item");
+  // An automatic analysis written from the title and description alone: redo it with the transcript.
+  await requestReanalysis(db, itemId);
   return text;
+}
+
+/**
+ * Re-run the automatic analysis when better material (transcript, description) arrives
+ * later. Only touches Gemini's own analysis — never one Claude wrote.
+ */
+export async function requestReanalysis(db: Db, itemId: string) {
+  const { data } = await db
+    .from("items")
+    .update({ analyzed_at: null, analysis_attempts: 0 })
+    .eq("id", itemId)
+    .eq("analyzed_by", "gemini")
+    .not("analyzed_at", "is", null)
+    .select("status");
+  if (!data?.length) return;
+  // Back to "ready for analysis" only when the transcript is there (status 'analyzed').
+  ok(await db.from("items").update({ status: "fetched" }).eq("id", itemId).eq("status", "analyzed"), "requeue");
+  ok(await db.from("video_details").update({ auto_next_at: null }).eq("item_id", itemId), "release");
 }
 
 export interface VideoMetadata {
@@ -360,10 +408,7 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
   }
 
   if (item.type === "video" && (a.description_info || a.mentions)) {
-    const vd = must(
-      await db.from("video_details").select("description_info").eq("item_id", item.id).single(),
-      "load video",
-    );
+    const vd = must(await db.from("video_details").select("description_info").eq("item_id", item.id).single(), "load video");
     const chapters = ((vd.description_info ?? []) as DescriptionInfo[]).filter((d) => d.kind === "chapter");
     const update: Record<string, unknown> = {};
     if (a.description_info) update.description_info = [...chapters, ...a.description_info.filter((d) => d.kind !== "chapter")];
@@ -396,7 +441,9 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
     );
   }
 
-  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
+  // Claude's topics replace the old ones; the automatic analysis only adds (it may be a redo,
+  // and the user could have adjusted the topics since).
+  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: by === "claude" });
   return {
     ok: true,
     item_id: item.id,
@@ -408,14 +455,24 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
 }
 
 async function ensureTags(db: Db, userId: string, names: string[]): Promise<{ id: string; name: string }[]> {
-  const wanted = [...new Map(names.map((n) => n.trim()).filter(Boolean).map((n) => [n.toLowerCase(), n])).values()];
+  const wanted = [
+    ...new Map(
+      names
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .map((n) => [n.toLowerCase(), n]),
+    ).values(),
+  ];
   if (!wanted.length) return [];
   const existing = must(await db.from("tags").select("id, name").eq("user_id", userId), "load topics") as { id: string; name: string }[];
   const byLower = new Map(existing.map((t) => [t.name.toLowerCase(), t]));
   const missing = wanted.filter((n) => !byLower.has(n.toLowerCase()));
   if (missing.length) {
     const created = must(
-      await db.from("tags").insert(missing.map((name) => ({ user_id: userId, name }))).select("id, name"),
+      await db
+        .from("tags")
+        .insert(missing.map((name) => ({ user_id: userId, name })))
+        .select("id, name"),
       "create topics",
     ) as { id: string; name: string }[];
     created.forEach((t) => byLower.set(t.name.toLowerCase(), t));
@@ -439,9 +496,10 @@ export async function setTopics(db: Db, userId: string, itemId: string, topics: 
   }
   if (tags.length) {
     ok(
-      await db
-        .from("item_tags")
-        .upsert(tags.map((t) => ({ item_id: itemId, tag_id: t.id, user_id: userId })), { onConflict: "item_id,tag_id", ignoreDuplicates: true }),
+      await db.from("item_tags").upsert(
+        tags.map((t) => ({ item_id: itemId, tag_id: t.id, user_id: userId })),
+        { onConflict: "item_id,tag_id", ignoreDuplicates: true },
+      ),
       "tag item",
     );
   }
@@ -462,7 +520,12 @@ export async function getItem(db: Db, userId: string, itemId: string, opts: { in
   const cols = `youtube_id, channel, thumbnail, published_at, duration_sec, description, description_info, mentions, transcript_lang, transcript_source${opts.includeTranscript ? ", transcript" : ""}`;
   const [video, links, tags, notes, collections] = await Promise.all([
     db.from("video_details").select(cols).eq("item_id", itemId).maybeSingle(),
-    db.from("links").select("url, domain, label, context, source, timestamp_sec").eq("item_id", itemId).eq("user_id", userId).order("created_at"),
+    db
+      .from("links")
+      .select("url, domain, label, context, source, timestamp_sec")
+      .eq("item_id", itemId)
+      .eq("user_id", userId)
+      .order("created_at"),
     db.from("item_tags").select("tags(name)").eq("item_id", itemId).eq("user_id", userId),
     db.from("notes").select("id, body, updated_at").eq("item_id", itemId).eq("user_id", userId).order("created_at"),
     db.from("collection_items").select("collections(name)").eq("item_id", itemId).eq("user_id", userId),
@@ -492,9 +555,7 @@ export async function getTranscriptPage(db: Db, userId: string, itemId: string, 
   );
   const segs = (vd.transcript_segments ?? []) as TranscriptSegment[];
   // With timestamps when we have them, so Claude can point at moments in the video.
-  const full = segs.length
-    ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n")
-    : (vd.transcript ?? "");
+  const full = segs.length ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n") : (vd.transcript ?? "");
   const pages = Math.max(1, Math.ceil(full.length / TRANSCRIPT_PAGE));
   const p = Math.max(1, Math.floor(page) || 1);
   if (p > pages) throw new HttpError(400, `Page ${p} does not exist — this transcript has ${pages} page(s)`);
@@ -532,7 +593,11 @@ export async function listLinks(db: Db, userId: string, args: { query?: string; 
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(clampInt(args.limit, 1, 200, 50));
-  const domain = args.domain?.trim().replace(/^[a-z]+:\/\//i, "").replace(/^www\./i, "").split(/[/?#]/)[0];
+  const domain = args.domain
+    ?.trim()
+    .replace(/^[a-z]+:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split(/[/?#]/)[0];
   if (domain) q = q.ilike("domain", `%${domain.replace(/[%_\\]/g, "\\$&")}%`);
   if (args.query) {
     const s = args.query.replace(/[%,()]/g, " ");
@@ -566,8 +631,13 @@ export async function addLink(db: Db, userId: string, itemId: string, url: strin
   }
   ok(
     await db.from("links").insert({
-      user_id: userId, item_id: itemId, url: normalized, domain: domainOf(normalized),
-      label: label ?? null, context: context ?? null, source: "manual",
+      user_id: userId,
+      item_id: itemId,
+      url: normalized,
+      domain: domainOf(normalized),
+      label: label ?? null,
+      context: context ?? null,
+      source: "manual",
     }),
     "add link",
   );
@@ -578,13 +648,19 @@ export async function addToCollection(db: Db, userId: string, itemId: string, co
   await ownedItem(db, userId, itemId);
   const name = collection.trim();
   if (!name) throw new HttpError(400, "Collection name is required");
-  const all = must(await db.from("collections").select("id, name").eq("user_id", userId), "load collections") as { id: string; name: string }[];
+  const all = must(await db.from("collections").select("id, name").eq("user_id", userId), "load collections") as {
+    id: string;
+    name: string;
+  }[];
   let col = all.find((c) => c.name.toLowerCase() === name.toLowerCase());
   if (!col) col = must(await db.from("collections").insert({ user_id: userId, name }).select("id, name").single(), "create collection");
   ok(
     await db
       .from("collection_items")
-      .upsert({ collection_id: col!.id, item_id: itemId, user_id: userId }, { onConflict: "collection_id,item_id", ignoreDuplicates: true }),
+      .upsert(
+        { collection_id: col!.id, item_id: itemId, user_id: userId },
+        { onConflict: "collection_id,item_id", ignoreDuplicates: true },
+      ),
     "add to collection",
   );
   return { ok: true, collection: col!.name };

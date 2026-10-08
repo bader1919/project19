@@ -8,8 +8,7 @@
 import type { TranscriptSegment } from "../shared/types";
 import { HttpError } from "./auth";
 import { must, ok, type Db } from "./db";
-import { applyMetadata, storeTranscript, type VideoMetadata } from "./library";
-import { requestReanalysis } from "./auto";
+import { applyMetadata, requestReanalysis, storeTranscript, type VideoMetadata } from "./library";
 import { safeUrl, text } from "./sanitize";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,8 +103,14 @@ export async function helperResult(db: Db, userId: string, body: Record<string, 
   const segments = cleanSegments(body.segments);
   let transcript: "saved" | "kept" | "missing" = vd.transcript ? "kept" : "missing";
   if (!vd.transcript && segments.length) {
-    await storeTranscript(db, userId, itemId, { segments, lang: text(body.lang, 20), source: "youtube (your PC)" });
-    transcript = "saved";
+    const saved = await storeTranscript(
+      db,
+      userId,
+      itemId,
+      { segments, lang: text(body.lang, 20), source: "youtube (your PC)" },
+      { onlyIfEmpty: true },
+    );
+    transcript = saved ? "saved" : "kept";
   }
 
   const patch: Record<string, unknown> = { helper_done: true };
@@ -116,6 +121,6 @@ export async function helperResult(db: Db, userId: string, body: Record<string, 
     console.log(`PC helper could not get captions for ${itemId}: ${body.error.slice(0, 300)}`);
   }
   // The description arrived after the automatic analysis was written: redo it with the full picture.
-  if (detailsAdded && item.analyzed_by === "gemini") await requestReanalysis(db, itemId);
+  if (detailsAdded && transcript !== "saved") await requestReanalysis(db, itemId);
   return { ok: true, transcript, details_added: detailsAdded };
 }

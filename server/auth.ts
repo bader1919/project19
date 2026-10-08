@@ -32,11 +32,13 @@ export async function userFromRequest(db: Db, req: Request): Promise<string> {
   return data.user.id;
 }
 
-/** User id from an MCP connector token (stored only as a SHA-256 hash). */
-export async function userFromToken(db: Db, token: string | undefined): Promise<string> {
+/** User id from a connector or PC-helper token (stored only as a SHA-256 hash). */
+export async function userFromToken(db: Db, token: string | undefined, scope: "mcp" | "helper" = "mcp"): Promise<string> {
   if (!token || token.length < 20) throw new HttpError(401, "Missing or invalid RefVault token");
-  const { data } = await db.from("api_tokens").select("id, user_id").eq("token_hash", hashToken(token)).maybeSingle();
+  const { data } = await db.from("api_tokens").select("id, user_id, scope").eq("token_hash", hashToken(token)).maybeSingle();
   if (!data) throw new HttpError(401, "Unknown RefVault token — generate a new connector URL in Settings");
+  // A PC-helper key only works for the helper, a connector key only for Claude.
+  if ((data.scope ?? "mcp") !== scope) throw new HttpError(403, "This RefVault key is not valid here");
   await db.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", data.id);
   return data.user_id as string;
 }

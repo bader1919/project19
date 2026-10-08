@@ -66,10 +66,11 @@ async function userFromRequest(db, req) {
   }
   return data.user.id;
 }
-async function userFromToken(db, token) {
+async function userFromToken(db, token, scope = "mcp") {
   if (!token || token.length < 20) throw new HttpError(401, "Missing or invalid RefVault token");
-  const { data } = await db.from("api_tokens").select("id, user_id").eq("token_hash", hashToken(token)).maybeSingle();
+  const { data } = await db.from("api_tokens").select("id, user_id, scope").eq("token_hash", hashToken(token)).maybeSingle();
   if (!data) throw new HttpError(401, "Unknown RefVault token \u2014 generate a new connector URL in Settings");
+  if ((data.scope ?? "mcp") !== scope) throw new HttpError(403, "This RefVault key is not valid here");
   await db.from("api_tokens").update({ last_used_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", data.id);
   return data.user_id;
 }
@@ -768,7 +769,12 @@ function parsePastedTranscript(raw) {
   const segs = [];
   for (const line of lines) {
     const m = line.match(TS);
-    if (m) segs.push({ start: m[1].split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0), dur: 0, text: m[2] ?? "" });
+    if (m)
+      segs.push({
+        start: m[1].split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0),
+        dur: 0,
+        text: m[2] ?? ""
+      });
     else if (segs.length) segs[segs.length - 1].text = `${segs[segs.length - 1].text} ${line}`.trim();
   }
   return segs.filter((s) => s.text);
@@ -877,7 +883,14 @@ async function retryTranscript(db, userId, itemId2, manualTranscript, fetchImpl 
   }
   const video = manualTranscript?.trim() && vd.description ? null : await fetchVideo(vd.youtube_id, fetchImpl);
   if (video && !vd.description && video.meta.description) await applyMetadata(db, userId, itemId2, video.meta, fetchImpl);
-  const t = video ? await resolveTranscript(db, userId, vd.youtube_id, video, manualTranscript, fetchImpl) : await resolveTranscript(db, userId, vd.youtube_id, { meta: {}, captionTracks: [] }, manualTranscript, fetchImpl);
+  const t = video ? await resolveTranscript(db, userId, vd.youtube_id, video, manualTranscript, fetchImpl) : await resolveTranscript(
+    db,
+    userId,
+    vd.youtube_id,
+    { meta: {}, captionTracks: [] },
+    manualTranscript,
+    fetchImpl
+  );
   if (!t.text) {
     ok(
       await db.from("video_details").update({ pc_failed: true, auto_attempts: 0, auto_next_at: null }).eq("item_id", itemId2),
@@ -891,15 +904,23 @@ async function retryTranscript(db, userId, itemId2, manualTranscript, fetchImpl 
   await storeTranscript(db, userId, itemId2, { segments: t.segments, text: t.text, lang: t.lang, source: t.source ?? "manual" });
   return { ok: true, source: t.source, length: t.text.length };
 }
-async function storeTranscript(db, userId, itemId2, t) {
+async function storeTranscript(db, userId, itemId2, t, opts = {}) {
   const text2 = (t.text ?? segmentsToText(t.segments)).slice(0, MAX_TRANSCRIPT_CHARS);
-  ok(
-    await db.from("video_details").update({ transcript: text2, transcript_segments: t.segments, transcript_lang: t.lang ?? guessLang(text2), transcript_source: t.source }).eq("item_id", itemId2),
-    "save transcript"
-  );
+  let q = db.from("video_details").update({ transcript: text2, transcript_segments: t.segments, transcript_lang: t.lang ?? guessLang(text2), transcript_source: t.source }).eq("item_id", itemId2);
+  if (opts.onlyIfEmpty) q = q.is("transcript", null);
+  const { data: saved, error } = await q.select("item_id");
+  if (error) throw new Error(`save transcript: ${error.message}`);
+  if (!saved?.length) return null;
   await insertLinks(db, userId, itemId2, extractTranscriptLinks(t.segments));
   ok(await db.from("items").update({ status: "fetched", error: null }).eq("id", itemId2).eq("status", "transcript_pending"), "update item");
+  await requestReanalysis(db, itemId2);
   return text2;
+}
+async function requestReanalysis(db, itemId2) {
+  const { data } = await db.from("items").update({ analyzed_at: null, analysis_attempts: 0 }).eq("id", itemId2).eq("analyzed_by", "gemini").not("analyzed_at", "is", null).select("status");
+  if (!data?.length) return;
+  ok(await db.from("items").update({ status: "fetched" }).eq("id", itemId2).eq("status", "analyzed"), "requeue");
+  ok(await db.from("video_details").update({ auto_next_at: null }).eq("item_id", itemId2), "release");
 }
 async function applyMetadata(db, userId, itemId2, m, fetchImpl = fetch) {
   if (!m.description) return;
@@ -934,10 +955,7 @@ async function saveAnalysis(db, userId, input, by = "claude") {
     ok(await db.from("items").update(patch).eq("id", item.id), "save summary");
   }
   if (item.type === "video" && (a.description_info || a.mentions)) {
-    const vd = must(
-      await db.from("video_details").select("description_info").eq("item_id", item.id).single(),
-      "load video"
-    );
+    const vd = must(await db.from("video_details").select("description_info").eq("item_id", item.id).single(), "load video");
     const chapters = (vd.description_info ?? []).filter((d) => d.kind === "chapter");
     const update = {};
     if (a.description_info) update.description_info = [...chapters, ...a.description_info.filter((d) => d.kind !== "chapter")];
@@ -968,7 +986,7 @@ async function saveAnalysis(db, userId, input, by = "claude") {
       }))
     );
   }
-  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
+  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: by === "claude" });
   return {
     ok: true,
     item_id: item.id,
@@ -979,7 +997,11 @@ async function saveAnalysis(db, userId, input, by = "claude") {
   };
 }
 async function ensureTags(db, userId, names) {
-  const wanted = [...new Map(names.map((n) => n.trim()).filter(Boolean).map((n) => [n.toLowerCase(), n])).values()];
+  const wanted = [
+    ...new Map(
+      names.map((n) => n.trim()).filter(Boolean).map((n) => [n.toLowerCase(), n])
+    ).values()
+  ];
   if (!wanted.length) return [];
   const existing = must(await db.from("tags").select("id, name").eq("user_id", userId), "load topics");
   const byLower = new Map(existing.map((t) => [t.name.toLowerCase(), t]));
@@ -1008,7 +1030,10 @@ async function setTopics(db, userId, itemId2, topics, opts = {}) {
   }
   if (tags.length) {
     ok(
-      await db.from("item_tags").upsert(tags.map((t) => ({ item_id: itemId2, tag_id: t.id, user_id: userId })), { onConflict: "item_id,tag_id", ignoreDuplicates: true }),
+      await db.from("item_tags").upsert(
+        tags.map((t) => ({ item_id: itemId2, tag_id: t.id, user_id: userId })),
+        { onConflict: "item_id,tag_id", ignoreDuplicates: true }
+      ),
       "tag item"
     );
   }
@@ -1124,7 +1149,10 @@ async function addToCollection(db, userId, itemId2, collection) {
   let col = all.find((c) => c.name.toLowerCase() === name.toLowerCase());
   if (!col) col = must(await db.from("collections").insert({ user_id: userId, name }).select("id, name").single(), "create collection");
   ok(
-    await db.from("collection_items").upsert({ collection_id: col.id, item_id: itemId2, user_id: userId }, { onConflict: "collection_id,item_id", ignoreDuplicates: true }),
+    await db.from("collection_items").upsert(
+      { collection_id: col.id, item_id: itemId2, user_id: userId },
+      { onConflict: "collection_id,item_id", ignoreDuplicates: true }
+    ),
     "add to collection"
   );
   return { ok: true, collection: col.name };
@@ -1511,9 +1539,9 @@ var CHUNK_SEC = 600;
 var MAX_CHUNKS = 36;
 var BACKOFF_MIN = [1, 3, 10, 30, 60, 180, 360, 720];
 var later = (attempt) => new Date(Date.now() + BACKOFF_MIN[Math.min(attempt, BACKOFF_MIN.length - 1)] * 6e4).toISOString();
-async function transcribeStep(db, userId, itemId2, fetchImpl = fetch) {
+async function transcribeStep(db, userId, itemId2, fetchImpl = fetch, timeoutMs = 1e5) {
   const vd = must(
-    await db.from("video_details").select("youtube_id, duration_sec, transcript, transcript_segments, transcript_cursor, auto_attempts").eq("item_id", itemId2).single(),
+    await db.from("video_details").select("youtube_id, duration_sec, transcript, transcript_segments, transcript_cursor, auto_attempts, end_signals").eq("item_id", itemId2).single(),
     "load video"
   );
   if (vd.transcript) return "done";
@@ -1524,17 +1552,19 @@ async function transcribeStep(db, userId, itemId2, fetchImpl = fetch) {
     return "gave_up";
   }
   const start = vd.transcript_cursor ?? 0;
-  const duration = vd.duration_sec ?? null;
+  const duration = vd.duration_sec || null;
+  const signals = vd.end_signals ?? 0;
   const done = (vd.transcript_segments ?? []).filter((s) => s.start < start);
   const finish = async () => {
     if (!done.length) {
       await giveUp(db, itemId2, attempts, "Gemini found no speech in this video. You can paste a transcript instead.");
       return "gave_up";
     }
-    await storeTranscript(db, userId, itemId2, { segments: done, lang: null, source: "gemini" });
+    await storeTranscript(db, userId, itemId2, { segments: done, lang: null, source: "gemini" }, { onlyIfEmpty: true });
     return "done";
   };
   if (duration && start >= duration || start >= CHUNK_SEC * MAX_CHUNKS) return finish();
+  const whole = !!duration && duration <= CHUNK_SEC && start === 0;
   const end = duration ? Math.min(start + CHUNK_SEC, duration) : start + CHUNK_SEC;
   let segments;
   try {
@@ -1543,14 +1573,24 @@ async function transcribeStep(db, userId, itemId2, fetchImpl = fetch) {
       keys.gemini_key,
       keys.gemini_model || DEFAULT_GEMINI_MODEL,
       fetchImpl,
-      1e5,
-      6e4,
-      // A whole short video in one go when its length is known; otherwise one part.
-      duration && duration <= CHUNK_SEC ? void 0 : { start, end }
+      timeoutMs,
+      Math.min(6e4, timeoutMs),
+      whole ? void 0 : { start, end }
     );
-    segments = r.segments.filter((s) => s.start >= start - 2 && s.start < end + 2);
+    let raw = r.segments;
+    if (!whole && start > 0 && raw.length && raw.every((s) => s.start < start - 2)) {
+      raw = raw.map((s) => ({ ...s, start: s.start + start }));
+    }
+    segments = whole ? raw : raw.filter((s) => s.start >= start - 2 && s.start < end + 2);
   } catch (e) {
-    if (e instanceof PastEndError) return finish();
+    if (e instanceof PastEndError && !duration) {
+      if (signals + 1 >= 2) return finish();
+      ok(
+        await db.from("video_details").update({ end_signals: signals + 1, auto_next_at: new Date(Date.now() + 6e4).toISOString() }).eq("item_id", itemId2),
+        "note end"
+      );
+      return "retry";
+    }
     const next = attempts + 1;
     ok(
       await db.from("video_details").update({ auto_attempts: next, auto_next_at: later(next) }).eq("item_id", itemId2),
@@ -1561,13 +1601,12 @@ async function transcribeStep(db, userId, itemId2, fetchImpl = fetch) {
     return "retry";
   }
   done.push(...segments);
-  const last = segments.length ? segments[segments.length - 1].start : -1;
-  const ended = duration !== null && end >= duration || start > 0 && !segments.length || segments.length > 0 && last < end - 90;
-  ok(
-    await db.from("video_details").update({ transcript_segments: done, transcript_cursor: end, auto_next_at: null }).eq("item_id", itemId2),
-    "save transcript part"
-  );
-  if (ended || !segments.length) return finish();
+  if (whole) return finish();
+  const nextSignals = segments.length ? 0 : signals + 1;
+  const { data: saved, error } = await db.from("video_details").update({ transcript_segments: done, transcript_cursor: end, end_signals: nextSignals, auto_next_at: null }).eq("item_id", itemId2).is("transcript", null).select("item_id");
+  if (error) throw new Error(`save transcript part: ${error.message}`);
+  if (!saved?.length) return "done";
+  if (duration && end >= duration || nextSignals >= 2) return finish();
   return "more";
 }
 async function giveUp(db, itemId2, attempts, message) {
@@ -1591,19 +1630,20 @@ Return ONLY one JSON object:
 }
 mentions = things said out loud or shown without a link. Use the [123s] markers for timestamp_sec.
 Give EVERY saved link a label. Never invent URLs.`;
+var fence = (t) => t.replace(/<\/?video>/gi, "");
 async function analyzeWithGemini(input, apiKey, fetchImpl = fetch, models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.5-flash"]) {
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,
     `SAVED LINKS:
 ${input.links.map((l) => `- ${l.url}${l.context ? ` \u2014 ${l.context.slice(0, 160)}` : ""}`).join("\n") || "(none)"}`,
     `<video>
-TITLE: ${input.title}
-CHANNEL: ${input.channel ?? ""}
+TITLE: ${fence(input.title)}
+CHANNEL: ${fence(input.channel ?? "")}
 DESCRIPTION:
-${(input.description ?? "").slice(0, 8e3)}
+${fence((input.description ?? "").slice(0, 8e3))}
 
 TRANSCRIPT:
-${input.transcript.slice(0, 15e4) || "(no transcript)"}
+${fence(input.transcript.slice(0, 15e4)) || "(no transcript)"}
 </video>`
   ].join("\n\n");
   let lastError = "Gemini is unavailable";
@@ -1649,7 +1689,10 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
   );
   if (item.analyzed_at) return "done";
   const keys = await userKeys(db, userId);
-  if (!keys.gemini_key) return "gave_up";
+  if (!keys.gemini_key) {
+    ok(await db.from("items").update({ analysis_attempts: 5 }).eq("id", itemId2), "stop analysis");
+    return "gave_up";
+  }
   const vd = must(
     await db.from("video_details").select("channel, description, transcript_segments, transcript").eq("item_id", itemId2).single(),
     "load video"
@@ -1672,6 +1715,15 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
       fetchImpl
     );
     delete analysis.extra_links;
+    const known = new Set(links.map((l) => l.url));
+    for (const key of ["description_info", "mentions"]) {
+      const list2 = analysis[key];
+      if (Array.isArray(list2)) {
+        analysis[key] = list2.map(
+          (x) => x && typeof x === "object" && !known.has(String(x.url)) ? { ...x, url: null } : x
+        );
+      }
+    }
     await saveAnalysis(db, userId, { ...analysis, item_id: itemId2 }, "gemini");
     return "done";
   } catch (e) {
@@ -1688,19 +1740,21 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch) {
 async function runWorker(db, budgetMs = 12e4, fetchImpl = fetch) {
   const stopAt = Date.now() + budgetMs;
   const log = [];
-  while (Date.now() < stopAt - 15e3) {
+  let outOfTime = false;
+  while (!outOfTime && Date.now() < stopAt - 15e3) {
     const { data: jobs, error } = await db.rpc("claim_auto_jobs", { p_limit: 2 });
     if (error) throw new Error(`claim jobs: ${error.message}`);
     if (!jobs?.length) break;
     for (const job of jobs) {
       if (Date.now() > stopAt - (job.kind === "transcript" ? 65e3 : 5e4)) {
         await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
+        outOfTime = true;
         continue;
       }
       try {
         let result;
         if (job.kind === "transcript") {
-          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl);
+          result = await transcribeStep(db, job.user_id, job.item_id, fetchImpl, Math.min(1e5, stopAt - Date.now() - 1e4));
           if (result === "more" || result === "done") {
             await db.from("video_details").update({ auto_next_at: null }).eq("item_id", job.item_id);
           }
@@ -1714,14 +1768,6 @@ async function runWorker(db, budgetMs = 12e4, fetchImpl = fetch) {
     }
   }
   return { processed: log };
-}
-async function requestReanalysis(db, itemId2) {
-  ok(
-    await db.from("items").update({ analyzed_at: null, analysis_attempts: 0 }).eq("id", itemId2).eq("analyzed_by", "gemini"),
-    "queue analysis"
-  );
-  ok(await db.from("items").update({ status: "fetched" }).eq("id", itemId2).eq("analyzed_by", "gemini").eq("status", "analyzed"), "requeue");
-  ok(await db.from("video_details").update({ auto_next_at: null }).eq("item_id", itemId2), "release");
 }
 
 // server/helper.ts
@@ -1789,8 +1835,14 @@ async function helperResult(db, userId, body) {
   const segments = cleanSegments(body.segments);
   let transcript = vd.transcript ? "kept" : "missing";
   if (!vd.transcript && segments.length) {
-    await storeTranscript(db, userId, itemId2, { segments, lang: text(body.lang, 20), source: "youtube (your PC)" });
-    transcript = "saved";
+    const saved = await storeTranscript(
+      db,
+      userId,
+      itemId2,
+      { segments, lang: text(body.lang, 20), source: "youtube (your PC)" },
+      { onlyIfEmpty: true }
+    );
+    transcript = saved ? "saved" : "kept";
   }
   const patch = { helper_done: true };
   if (transcript === "missing") Object.assign(patch, { pc_failed: true, auto_next_at: null });
@@ -1798,7 +1850,7 @@ async function helperResult(db, userId, body) {
   if (transcript === "missing" && typeof body.error === "string") {
     console.log(`PC helper could not get captions for ${itemId2}: ${body.error.slice(0, 300)}`);
   }
-  if (detailsAdded && item.analyzed_by === "gemini") await requestReanalysis(db, itemId2);
+  if (detailsAdded && transcript !== "saved") await requestReanalysis(db, itemId2);
   return { ok: true, transcript, details_added: detailsAdded };
 }
 
@@ -1828,22 +1880,31 @@ async function handleIngest(req) {
     return withCors(errorResponse(e));
   }
 }
-async function handleToken(req, mcpBase) {
+async function handleToken(req, mcpBase, helperBase) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   try {
     const db = adminDb();
     const userId = await userFromRequest(db, req);
     if (req.method === "POST") {
       const body = await req.json().catch(() => ({}));
+      const scope = body.scope === "helper" ? "helper" : "mcp";
       const token = newToken();
       ok(
-        await db.from("api_tokens").insert({ user_id: userId, token_hash: hashToken(token), label: body.label ?? "Claude connector" }),
+        await db.from("api_tokens").insert({
+          user_id: userId,
+          token_hash: hashToken(token),
+          scope,
+          label: body.label ?? (scope === "helper" ? "PC helper" : "Claude connector")
+        }),
         "save token"
       );
-      return withCors(json({ token, url: `${mcpBase}/${token}` }));
+      return withCors(json({ token, url: scope === "helper" ? `${helperBase}/${token}` : `${mcpBase}/${token}` }));
     }
     if (req.method === "DELETE") {
-      ok(await db.from("api_tokens").delete().eq("user_id", userId), "revoke tokens");
+      const scope = new URL(req.url).searchParams.get("scope");
+      let del = db.from("api_tokens").delete().eq("user_id", userId);
+      if (scope === "mcp" || scope === "helper") del = del.eq("scope", scope);
+      ok(await del, "revoke tokens");
       return withCors(json({ ok: true }));
     }
     throw new HttpError(405, "Use POST or DELETE");
@@ -1858,7 +1919,7 @@ function handleMcp(req, token) {
 async function handleHelper(req, token, action) {
   try {
     const db = adminDb();
-    const userId = await userFromToken(db, token);
+    const userId = await userFromToken(db, token, "helper");
     if (action === "jobs" && req.method === "GET") return json(await helperJobs(db, userId));
     if (action === "result" && req.method === "POST") {
       const body = await req.json().catch(() => null);
@@ -1902,6 +1963,6 @@ Deno.serve((req) => {
   if (helper) return handleHelper(req, decodeURIComponent(helper[1]), helper[2]);
   if (path.endsWith("/worker")) return handleWorker(req);
   if (path.endsWith("/ingest")) return handleIngest(req);
-  if (path.endsWith("/token")) return handleToken(req, `${base}/mcp`);
+  if (path.endsWith("/token")) return handleToken(req, `${base}/mcp`, `${base}/helper`);
   return json({ name: "RefVault API", ok: true });
 });

@@ -22,6 +22,6 @@ Deno.serve((req) => {
   if (helper) return handleHelper(req, decodeURIComponent(helper[1]), helper[2]);
   if (path.endsWith("/worker")) return handleWorker(req);
   if (path.endsWith("/ingest")) return handleIngest(req);
-  if (path.endsWith("/token")) return handleToken(req, `${base}/mcp`);
+  if (path.endsWith("/token")) return handleToken(req, `${base}/mcp`, `${base}/helper`);
   return json({ name: "RefVault API", ok: true });
 });

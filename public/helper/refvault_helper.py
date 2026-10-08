@@ -47,7 +47,8 @@ def log(msg: str) -> None:
 
 
 def load_config() -> dict:
-    cfg = json.loads(CONFIG.read_text(encoding="utf-8")) if CONFIG.exists() else {}
+    # utf-8-sig: Windows PowerShell may write the file with a byte-order mark.
+    cfg = json.loads(CONFIG.read_text(encoding="utf-8-sig")) if CONFIG.exists() else {}
     if os.environ.get("RV_HELPER_URL"):
         cfg["url"] = os.environ["RV_HELPER_URL"]
     if not cfg.get("url"):
@@ -121,7 +122,12 @@ def fetch_details(video_id: str) -> dict | None:
 EXPECTED = {"TranscriptsDisabled", "NoTranscriptFound", "VideoUnavailable", "AgeRestricted", "InvalidVideoId", "RuntimeError"}
 
 
-def handle(session: requests.Session, base: str, job: dict, failures: list) -> str:
+# Network trouble on this computer: try the same video again later instead of giving up on it.
+TRANSIENT = {"ConnectionError", "Timeout", "ReadTimeout", "ConnectTimeout", "ProxyError", "SSLError", "ChunkedEncodingError"}
+MAX_TRIES = 3
+
+
+def handle(session: requests.Session, base: str, job: dict, failures: list, tries: dict) -> str:
     vid = job["youtube_id"]
     body: dict = {"item_id": job["item_id"]}
     if job.get("need_details"):
@@ -135,8 +141,15 @@ def handle(session: requests.Session, base: str, job: dict, failures: list) -> s
         try:
             body["segments"], body["lang"] = fetch_transcript(vid)
         except Exception as e:
-            if type(e).__name__ not in EXPECTED:
-                failures.append(e)
+            name = type(e).__name__
+            if name not in EXPECTED:
+                tries[vid] = tries.get(vid, 0) + 1
+                if tries[vid] < MAX_TRIES:
+                    if name not in TRANSIENT:
+                        failures.append(e)
+                    return f"{vid}: will retry ({name}: {str(e)[:120]})"
+                if name not in TRANSIENT:
+                    failures.append(e)
             body["error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"
     r = session.post(f"{base}/result", json=body, timeout=60)
     r.raise_for_status()
@@ -144,23 +157,31 @@ def handle(session: requests.Session, base: str, job: dict, failures: list) -> s
     return f"{vid}: {got}{', details' if body.get('meta') else ''}"
 
 
-def one_round(session: requests.Session, base: str, failures: list) -> int:
+def one_round(session: requests.Session, base: str, failures: list, tries: dict) -> int:
     r = session.get(f"{base}/jobs", timeout=30)
     if r.status_code == 401:
         raise PermissionError("RefVault rejected the helper URL — it was probably revoked. Re-run the install command from Settings.")
     r.raise_for_status()
     data = r.json()
     for job in data.get("jobs", []):
-        log(handle(session, base, job, failures))
+        log(handle(session, base, job, failures, tries))
     return int(data.get("poll_seconds", 20))
 
 
 def maybe_upgrade(cfg: dict, state: dict, error: Exception) -> None:
     """YouTube changes often; when captions break, update youtube-transcript-api (at most every 6 h)."""
     uv = cfg.get("uv")
-    if not uv or time.time() - state.get("upgraded", 0) < 6 * 3600:
+    stamp = HERE / "last_upgrade"  # survives restarts, so a broken video can't cause a restart loop
+    try:
+        last = float(stamp.read_text())
+    except (OSError, ValueError):
+        last = 0.0
+    if not uv or time.time() - last < 6 * 3600:
         return
-    state["upgraded"] = time.time()
+    try:
+        stamp.write_text(str(time.time()))
+    except OSError:
+        return
     log(f"captions failing ({error}); updating youtube-transcript-api and restarting")
     try:
         subprocess.run([uv, "run", "--upgrade", "--script", str(Path(__file__).resolve()), "--check"], timeout=600, check=False)
@@ -191,6 +212,8 @@ def main() -> None:
     if "--check" in sys.argv:
         r = session.get(f"{base}/jobs", timeout=30)
         print("RefVault:", "connected" if r.ok else f"error {r.status_code} {r.text[:200]}")
+        if not r.ok:
+            sys.exit(1)
         try:
             segs, lang = fetch_transcript("jNQXAC9IVRw")
             print(f"YouTube captions: working ({len(segs)} lines, {lang})")
@@ -203,11 +226,12 @@ def main() -> None:
         return  # already running
     log(f"RefVault helper {VERSION} started")
     state: dict = {"lock": lock}
+    tries: dict = {}
     delay = 20
     while True:
         failures: list = []
         try:
-            delay = one_round(session, base, failures)
+            delay = one_round(session, base, failures, tries)
             if failures:
                 maybe_upgrade(cfg, state, failures[-1])
         except PermissionError as e:

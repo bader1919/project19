@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Download, KeyRound, LogOut, Monitor, Plug, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { api, API_BASE } from "../lib/api";
+import { api } from "../lib/api";
 import { exportJson, exportMarkdown } from "../lib/export";
 import { useSession } from "../lib/auth";
 import { PageHeader } from "../components/ui";
@@ -22,7 +22,7 @@ function ConnectorCard() {
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    const { data } = await supabase.from("api_tokens").select("id, label, created_at, last_used_at").order("created_at");
+    const { data } = await supabase.from("api_tokens").select("id, label, created_at, last_used_at").eq("scope", "mcp").order("created_at");
     setTokens(data ?? []);
   };
   useEffect(() => {
@@ -78,7 +78,7 @@ function ConnectorCard() {
             className="btn-danger"
             onClick={async () => {
               if (!confirm("Disconnect every Claude connector using RefVault? You'll need to add a new URL in Claude.")) return;
-              await api("/token", { method: "DELETE" });
+              await api("/token?scope=mcp", { method: "DELETE" });
               setUrl(null);
               load();
             }}
@@ -183,8 +183,8 @@ function HelperCard() {
         onClick={async () => {
           try {
             setError(null);
-            const r = await api<{ token: string }>("/token", { body: { label: "PC helper" } });
-            setHelperUrl(`${API_BASE}/helper/${r.token}`);
+            const r = await api<{ url: string }>("/token", { body: { label: "PC helper", scope: "helper" } });
+            setHelperUrl(r.url);
             setCopied(false);
           } catch (e) {
             setError((e as Error).message);
