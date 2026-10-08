@@ -8,6 +8,7 @@ import { SkeletonRows } from "../components/Skeleton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { IconButton } from "../components/IconButton";
 import { Menu } from "../components/Menu";
+import { focusIfLost } from "../lib/focus";
 
 type Col = { id: string; name: string; description: string | null; count: number };
 
@@ -65,9 +66,7 @@ export function Collections() {
             required
             aria-invalid={nameError ? true : undefined}
             aria-describedby={nameError ? "col-name-error" : undefined}
-            onChange={(e) => setName(e.target.value)}
-            onFocus={() => setNameError(null)}
-            onBlur={() => name && setNameError(validate(name))}
+            onChange={(e) => { setName(e.target.value); setNameError(null); }}
           />
           {nameError && <p id="col-name-error" role="alert" className="mt-1 text-meta text-danger">{nameError}</p>}
         </div>
@@ -97,7 +96,7 @@ export function Collections() {
               <Link to={`/library?collection=${c.id}`} className="min-w-0 flex-1">
                 <p dir="auto" className="truncate font-serif text-[1.125rem] font-semibold leading-7 group-hover:text-binding">{c.name}</p>
                 {c.description && <p dir="auto" className="line-clamp-2 text-meta text-ink-2">{c.description}</p>}
-                <p className="text-meta text-ink-2">{c.count} {c.count === 1 ? "video" : "videos"}</p>
+                <p className="text-meta text-ink-2"><bdi>{c.count} {c.count === 1 ? "video" : "videos"}</bdi></p>
               </Link>
               <div className="hidden sm:block [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
                 <IconButton label={`Delete collection ${c.name}`} onClick={() => setDeleting(c)}><Trash2 className="h-4 w-4" aria-hidden="true" /></IconButton>
@@ -121,7 +120,7 @@ export function Collections() {
           confirmLabel="Delete collection"
           danger
           onConfirm={async () => { await deleteCollection(deleting.id); cols.reload(); }}
-          onClose={() => setDeleting(null)}
+          onClose={() => { setDeleting(null); focusIfLost("main"); }}
         />
       )}
     </div>

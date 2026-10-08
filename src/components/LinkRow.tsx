@@ -74,7 +74,7 @@ export function LinkRow({
         {!compact && link.items && (
           <Link
             to={fromTo}
-            className="relative z-10 mt-1 block max-w-full truncate text-meta text-ink-2 hover:text-binding hover:underline"
+            className="relative z-10 mt-1 block max-w-full truncate text-meta text-ink-2 hover:text-binding hover:underline max-sm:-my-2 max-sm:py-3"
           >
             From <bdi>{link.items.title}</bdi>
           </Link>

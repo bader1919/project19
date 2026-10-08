@@ -8,6 +8,7 @@ import { SkeletonRows } from "../components/Skeleton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { IconButton } from "../components/IconButton";
 import { Menu } from "../components/Menu";
+import { focusIfLost } from "../lib/focus";
 
 type Topic = { id: string; name: string; item_count: number };
 type Sort = "used" | "az";
@@ -17,9 +18,16 @@ const count = (n: number) => `${n} ${Number(n) === 1 ? "video" : "videos"}`;
 /** Name that turns into an input in the same box (no layout shift). Enter saves, Esc cancels. */
 function NameCell({ topic, editing, onDone }: { topic: Topic; editing: boolean; onDone: (name: string | null) => void }) {
   const ref = useRef<HTMLInputElement>(null);
+  const link = useRef<HTMLAnchorElement>(null);
   const finished = useRef(false);
+  const restoreFocus = useRef(false);
+  const wasEditing = useRef(false);
   const [value, setValue] = useState(topic.name);
   useEffect(() => {
+    // Enter or Esc ends the edit: hand focus back to the name so keyboard users keep their place.
+    if (wasEditing.current && !editing && restoreFocus.current) link.current?.focus();
+    restoreFocus.current = false;
+    wasEditing.current = editing;
     if (editing) {
       finished.current = false;
       setValue(topic.name);
@@ -35,11 +43,12 @@ function NameCell({ topic, editing, onDone }: { topic: Topic; editing: boolean; 
   return (
     <div className="grid h-7 grid-cols-[minmax(0,1fr)]">
       <Link
+        ref={link}
         to={`/library?tag=${encodeURIComponent(topic.name)}`}
         dir="auto"
         tabIndex={editing ? -1 : 0}
         aria-hidden={editing}
-        className={`col-start-1 row-start-1 truncate font-serif text-[1.125rem] font-semibold leading-7 group-hover:text-binding ${editing ? "invisible" : ""}`}
+        className={`col-start-1 row-start-1 truncate after:absolute after:inset-0 font-serif text-[1.125rem] font-semibold leading-7 group-hover:text-binding ${editing ? "invisible" : ""}`}
       >
         {topic.name}
       </Link>
@@ -52,8 +61,8 @@ function NameCell({ topic, editing, onDone }: { topic: Topic; editing: boolean; 
           onChange={(e) => setValue(e.target.value)}
           onBlur={() => finish(true)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") { e.preventDefault(); finish(true); }
-            else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
+            if (e.key === "Enter") { e.preventDefault(); restoreFocus.current = true; finish(true); }
+            else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); restoreFocus.current = true; finish(false); }
           }}
           className="col-start-1 row-start-1 h-7 w-full rounded-tab border border-binding bg-sheet px-1 font-serif text-[1.125rem] font-semibold leading-7"
         />
@@ -118,12 +127,12 @@ export function Topics() {
       ) : (
         <ul className="grid sm:grid-cols-2 sm:gap-x-10">
           {rows.map((t) => (
-            <li key={t.id} dir={/[\u0590-\u08FF]/.test(t.name) ? "rtl" : "ltr"} className="row group flex items-center gap-2">
+            <li key={t.id} dir={/[\u0590-\u08FF]/.test(t.name) ? "rtl" : "ltr"} className="row group relative flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <NameCell topic={t} editing={editing === t.id} onDone={(n) => rename(t, n)} />
-                <p className="text-meta text-ink-2">{count(Number(t.item_count))}</p>
+                <p className="text-meta text-ink-2"><bdi>{count(Number(t.item_count))}</bdi></p>
               </div>
-              <div className="hidden gap-0.5 sm:flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
+              <div className="relative hidden gap-0.5 sm:flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
                 <IconButton label={`Rename topic ${t.name}`} onClick={() => setEditing(t.id)}><Pencil className="h-4 w-4" aria-hidden="true" /></IconButton>
                 <IconButton label={`Delete topic ${t.name}`} onClick={() => setDeleting(t)}><Trash2 className="h-4 w-4" aria-hidden="true" /></IconButton>
               </div>
@@ -149,7 +158,7 @@ export function Topics() {
           confirmLabel="Delete topic"
           danger
           onConfirm={async () => { await deleteTopic(deleting.id); topics.reload(); }}
-          onClose={() => setDeleting(null)}
+          onClose={() => { setDeleting(null); focusIfLost("main"); }}
         />
       )}
     </div>

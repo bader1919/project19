@@ -51,6 +51,11 @@ function ItemSkeleton() {
  */
 export function ItemPage() {
   const { id = "" } = useParams();
+  // Remount per video so the seek position and stale content never leak from one video to the next.
+  return <ItemView key={id} id={id} />;
+}
+
+function ItemView({ id }: { id: string }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { data: item, error, loading, reload } = useAsync(() => loadItem(id), [id]);

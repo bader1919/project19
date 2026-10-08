@@ -32,6 +32,9 @@ export function Sheet({
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Read through a ref so toggling `dismissible` (busy states) never re-runs the focus/scroll-lock effect.
+  const dismissibleRef = useRef(dismissible);
+  dismissibleRef.current = dismissible;
 
   useEffect(() => {
     const el = panel.current;
@@ -47,7 +50,7 @@ export function Sheet({
     root.style.overflow = "hidden";
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && dismissible) {
+      if (e.key === "Escape" && dismissibleRef.current) {
         e.stopPropagation();
         onCloseRef.current();
       } else if (e.key === "Tab") {
@@ -73,7 +76,7 @@ export function Sheet({
       root.style.overflow = prevOverflow;
       if (opener && opener.isConnected) opener.focus();
     };
-  }, [dismissible, opener]);
+  }, [opener]);
 
   const wrap =
     placement === "center" ? "items-center justify-center p-4"

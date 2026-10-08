@@ -24,6 +24,7 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
   const [showPaste, setShowPaste] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const [result, setResult] = useState<IngestResult | null>(null);
   const videoId = useMemo(() => parseYouTubeId(url), [url]);
   const canReadClipboard = typeof navigator !== "undefined" && Boolean(navigator.clipboard?.readText);
@@ -70,9 +71,12 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
               autoComplete="off"
               placeholder="https://youtube.com/watch?v=…"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => { setUrl(e.target.value); if ((e.nativeEvent as InputEvent).inputType === "insertFromPaste") setUrlTouched(true); }}
+              onFocus={() => setUrlTouched(false)}
+              onBlur={() => setUrlTouched(true)}
+              aria-invalid={urlTouched && url && !videoId ? true : undefined}
             />
-            {url && !videoId ? (
+            {url && !videoId && (urlTouched || initialText) ? (
               <p className="mt-1.5 text-meta text-danger" role="alert">
                 Couldn't save this link. It isn't a YouTube video URL. Paste a link like youtube.com/watch?v=…
               </p>
@@ -128,7 +132,7 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
           </div>
           <div className="flex justify-end gap-2">
             <button className="btn-ghost" onClick={() => { setResult(null); setUrl(""); setTranscript(""); }}>Save another</button>
-            <button className="btn-primary" onClick={() => { onClose(); navigate(`/item/${result.item_id}`); }}>Open video</button>
+            <button autoFocus className="btn-primary" onClick={() => { onClose(); navigate(`/item/${result.item_id}`); }}>Open video</button>
           </div>
         </div>
       )}

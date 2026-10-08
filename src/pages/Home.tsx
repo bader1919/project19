@@ -59,7 +59,7 @@ function SmartInput() {
           ref={ref}
           dir="auto"
           className="input min-h-[52px] flex-1 text-[1.0625rem]"
-          placeholder="youtube.com/watch?v=… or a word you remember"
+          placeholder="A YouTube link or a word you remember"
           value={value}
           autoComplete="off"
           aria-describedby={error ? "smart-error" : undefined}
@@ -77,12 +77,12 @@ function SmartInput() {
 function Section({ title, count, more, children }: { title: string; count?: number; more?: { to: string; label: string }; children: React.ReactNode }) {
   return (
     <section className="mt-12">
-      <div className="mb-2 flex items-baseline justify-between gap-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
         <h2 className="text-h2">
           {title}
           {count !== undefined && <span className="ms-2 font-sans text-meta font-normal text-ink-2">{count}</span>}
         </h2>
-        {more && <Link to={more.to} className="text-meta text-binding hover:underline">{more.label}</Link>}
+        {more && <Link to={more.to} className="inline-flex min-h-[44px] items-center text-meta text-binding hover:underline sm:min-h-0">{more.label}</Link>}
       </div>
       {children}
     </section>
@@ -112,9 +112,9 @@ export function Home() {
           <p className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="font-semibold">Topics</span>
             {top.map((t) => (
-              <Link key={t.id} to={`/library?tag=${encodeURIComponent(t.name)}`} dir="auto" className="inline-flex min-h-[32px] items-center text-binding hover:underline">{t.name}</Link>
+              <Link key={t.id} to={`/library?tag=${encodeURIComponent(t.name)}`} dir="auto" className="inline-flex min-h-[44px] items-center justify-center text-binding hover:underline max-sm:min-w-[44px] sm:min-h-[32px]">{t.name}</Link>
             ))}
-            <Link to="/topics" className="inline-flex min-h-[32px] items-center text-binding hover:underline">all topics</Link>
+            <Link to="/topics" className="inline-flex min-h-[44px] items-center text-binding hover:underline sm:min-h-[32px]">all topics</Link>
           </p>
         )}
         {stats.data && stats.data.items > 0 && (

@@ -19,7 +19,11 @@ function useActiveSection(ids: string[], skip: string[]) {
     const els = ids.filter((id) => !skip.includes(id)).map((id) => document.getElementById(id)).filter((e): e is HTMLElement => !!e);
     const pick = () => {
       const last = ids.filter((id) => visible.has(id)).pop();
-      if (last) setActive(last);
+      if (last) return setActive(last);
+      // Nothing inside the band (page top, or a gap between sections): the section above the band's lower edge wins.
+      let cur = els[0]?.id ?? ids[0] ?? "";
+      for (const el of els) if (el.getBoundingClientRect().top <= window.innerHeight * 0.45) cur = el.id;
+      setActive(cur);
     };
     // The band starts under the sticky chrome and ends before the lower half of the viewport.
     const io = new IntersectionObserver(

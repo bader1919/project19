@@ -6,7 +6,7 @@ import { IconButton } from "../IconButton";
 import { Menu } from "../Menu";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { safeHref } from "../../lib/url";
-import { Block, CopyButton, type SeekFn } from "./shared";
+import { Block, CopyButton, focusIfLost, type SeekFn } from "./shared";
 
 const RTL = /[֐-ࣿ]/;
 
@@ -58,7 +58,7 @@ function LinkItem({ link, onSeek, onChanged, onRemove }: { link: LinkRow; onSeek
               href={safeHref(link.url)}
               target="_blank"
               rel="noreferrer"
-              dir="auto"
+              dir={rtl ? "rtl" : "auto"}
               className={`col-start-1 row-start-1 min-w-0 self-center truncate text-start text-body font-medium hover:underline ${editing ? "invisible" : ""}`}
               tabIndex={editing ? -1 : 0}
               title={link.url}
@@ -85,7 +85,7 @@ function LinkItem({ link, onSeek, onChanged, onRemove }: { link: LinkRow; onSeek
               />
             )}
           </div>
-          <p className="-mt-1 truncate text-meta text-ink-2" dir="auto" title={link.url}>
+          <p className="-mt-1 truncate text-meta text-ink-2" dir={rtl ? "rtl" : "auto"} title={link.url}>
             <span className="text-binding">{link.domain ?? link.url}</span>
             {source ? `, ${source}` : ""}
           </p>
@@ -120,6 +120,13 @@ function AddLinkForm({ itemId, onAdded }: { itemId: string; onAdded: () => void 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!open && refocus.current) {
+      refocus.current = false;
+      trigger.current?.focus();
+    }
+  }, [open]);
 
   if (!open) {
     return (
@@ -129,9 +136,9 @@ function AddLinkForm({ itemId, onAdded }: { itemId: string; onAdded: () => void 
     );
   }
   const close = () => {
+    refocus.current = true;
     setOpen(false);
     setError(null);
-    requestAnimationFrame(() => trigger.current?.focus());
   };
   return (
     <form
@@ -145,6 +152,7 @@ function AddLinkForm({ itemId, onAdded }: { itemId: string; onAdded: () => void 
           setUrl("");
           setLabel("");
           setError(null);
+          refocus.current = true;
           setOpen(false);
           onAdded();
         } catch (err) {
@@ -196,7 +204,7 @@ export function LinksBlock({ item, working, onSeek, onChanged }: { item: ItemFul
             await deleteLink(removing.id);
             onChanged();
           }}
-          onClose={() => setRemoving(null)}
+          onClose={() => { setRemoving(null); focusIfLost("links-h"); }}
         />
       )}
     </Block>

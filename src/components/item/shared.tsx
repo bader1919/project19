@@ -9,6 +9,8 @@ export function asArray<T>(v: T[] | null | undefined): T[] {
 
 export type SeekFn = (sec: number) => void;
 
+export { focusIfLost } from "../../lib/focus";
+
 /** Icon button that copies text and shows a check for a moment. */
 export function CopyButton({ text, label = "Copy", className = "" }: { text: string; label?: string; className?: string }) {
   const [state, setState] = useState<"idle" | "done" | "failed">("idle");

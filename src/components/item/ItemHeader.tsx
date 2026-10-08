@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, X } from "lucide-react";
 import { addTopic, removeTopic, type ItemFull } from "../../lib/data";
 import { formatDate, formatTimestamp } from "../../lib/format";
+import { safeHref } from "../../lib/url";
 import { ErrorBox, StatusNote } from "../ui";
 
 function TopicChips({ item, onChanged }: { item: ItemFull; onChanged: () => void }) {
@@ -12,18 +13,19 @@ function TopicChips({ item, onChanged }: { item: ItemFull; onChanged: () => void
   const input = useRef<HTMLInputElement>(null);
   const addBtn = useRef<HTMLButtonElement>(null);
 
-  const close = () => {
+  // `refocus` is false when the input lost focus because the user went elsewhere: don't pull focus back.
+  const close = (refocus = true) => {
     setAdding(false);
     setName("");
     setError(null);
-    requestAnimationFrame(() => addBtn.current?.focus());
+    if (refocus) requestAnimationFrame(() => addBtn.current?.focus());
   };
 
   return (
     <div className="mt-4 flex flex-wrap items-center gap-2">
       {item.topics.map((t) => (
         <span key={t.id} className="chip py-0 ps-2 pe-0" dir="auto">
-          <Link to={`/library?tag=${encodeURIComponent(t.name)}`} className="py-1 hover:underline">{t.name}</Link>
+          <Link to={`/library?tag=${encodeURIComponent(t.name)}`} className="relative py-1 before:absolute before:-inset-2 before:content-[''] hover:underline">{t.name}</Link>
           <button
             type="button"
             aria-label={`Remove topic ${t.name}`}
@@ -67,7 +69,7 @@ function TopicChips({ item, onChanged }: { item: ItemFull; onChanged: () => void
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), close())}
-            onBlur={() => !name.trim() && close()}
+            onBlur={() => !name.trim() && close(false)}
             aria-label="Topic name"
             placeholder="Topic name"
           />
@@ -93,7 +95,7 @@ export function ItemHeader({ item, working, onChanged }: { item: ItemFull; worki
   const navigate = useNavigate();
   const v = item.video;
   const bits: React.ReactNode[] = [];
-  if (v?.channel) bits.push(v.channel_url ? <a key="c" href={v.channel_url} target="_blank" rel="noreferrer" className="hover:underline"><bdi>{v.channel}</bdi></a> : <bdi key="c">{v.channel}</bdi>);
+  if (v?.channel) bits.push(safeHref(v.channel_url) ? <a key="c" href={safeHref(v.channel_url)} target="_blank" rel="noreferrer" className="hover:underline"><bdi>{v.channel}</bdi></a> : <bdi key="c">{v.channel}</bdi>);
   if (v?.duration_sec) bits.push(<span key="d" className="num">{formatTimestamp(v.duration_sec)}</span>);
   if (v?.published_at) bits.push(<span key="p">published {formatDate(v.published_at)}</span>);
   bits.push(<span key="s">saved {formatDate(item.created_at)}</span>);

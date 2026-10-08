@@ -1,6 +1,7 @@
 import { forwardRef, useState } from "react";
 import { ExternalLink, MoreHorizontal, Trash2 } from "lucide-react";
 import { Menu } from "../Menu";
+import { safeHref } from "../../lib/url";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TimelineStrip, type StripChapter, type StripMark } from "./TimelineStrip";
 
@@ -33,14 +34,14 @@ export const PlayerBox = forwardRef<HTMLDivElement, {
       )}
       <TimelineStrip duration={duration} chapters={chapters} marks={marks} playhead={start} onSeek={onSeek} />
       <div className="mt-3 flex items-center gap-1">
-        {sourceUrl && (
-          <a href={sourceUrl} target="_blank" rel="noreferrer" className="btn-outline btn-sm">
+        {safeHref(sourceUrl) && (
+          <a href={safeHref(sourceUrl)} target="_blank" rel="noreferrer" className="btn-outline btn-sm">
             <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open on YouTube
           </a>
         )}
         <Menu
           label="More actions"
-          align="start"
+          align="end"
           className="ms-auto"
           trigger={<MoreHorizontal className="h-5 w-5" aria-hidden="true" />}
           items={[{ label: "Delete video", danger: true, icon: <Trash2 className="h-4 w-4" aria-hidden="true" />, onSelect: () => setConfirming(true) }]}

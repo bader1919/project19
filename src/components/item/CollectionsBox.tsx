@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { listCollections, setInCollection, type ItemFull } from "../../lib/data";
 import { useAsync } from "../../lib/useAsync";
@@ -6,6 +7,9 @@ import { useAsync } from "../../lib/useAsync";
 export function CollectionsBox({ item, onChanged }: { item: ItemFull; onChanged: () => void }) {
   const all = useAsync(listCollections, []);
   const inside = new Set(item.collections.map((c) => c.id));
+  // Show the tick at once; the server round trip and reload follow.
+  const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
   return (
     <section aria-labelledby="collections-h">
       <h2 id="collections-h" className="mb-2 font-serif text-lead font-semibold">Collections</h2>
@@ -17,10 +21,19 @@ export function CollectionsBox({ item, onChanged }: { item: ItemFull; onChanged:
                 <input
                   type="checkbox"
                   className="h-5 w-5 shrink-0 accent-binding sm:h-4 sm:w-4"
-                  checked={inside.has(c.id)}
+                  checked={optimistic[c.id] ?? inside.has(c.id)}
                   onChange={async (e) => {
-                    await setInCollection(item.id, c.id, e.target.checked);
-                    onChanged();
+                    const on = e.target.checked;
+                    setOptimistic((o) => ({ ...o, [c.id]: on }));
+                    setError(null);
+                    try {
+                      await setInCollection(item.id, c.id, on);
+                      onChanged();
+                    } catch {
+                      setError("Couldn't update the collection. Check your connection and try again.");
+                    } finally {
+                      setOptimistic((o) => { const { [c.id]: _gone, ...rest } = o; return rest; });
+                    }
                   }}
                 />
                 <span dir="auto" className="min-w-0 text-body">{c.name}</span>
@@ -31,6 +44,7 @@ export function CollectionsBox({ item, onChanged }: { item: ItemFull; onChanged:
       ) : all.loading ? null : (
         <p className="text-meta text-ink-2">No collections yet. <Link to="/collections" className="text-binding hover:underline">Create a collection</Link></p>
       )}
+      {error && <p role="alert" className="mt-2 text-meta text-danger">{error}</p>}
     </section>
   );
 }

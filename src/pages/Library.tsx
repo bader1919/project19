@@ -40,6 +40,8 @@ export function Library({ type }: { type?: string }) {
   const collections = useAsync(listCollections, []);
   const [extra, setExtra] = useState<SearchRow[]>([]);
   const [more, setMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
   const results = useAsync(
     () => searchItems({ q, type, tag, collection, status, limit: PAGE }),
     [q, type, tag, collection, status],
@@ -47,6 +49,7 @@ export function Library({ type }: { type?: string }) {
   useEffect(() => {
     setExtra([]);
     setMore(true);
+    setMoreError(false);
   }, [q, type, tag, collection, status]);
 
   const items = [...(results.data ?? []), ...extra];
@@ -121,14 +124,25 @@ export function Library({ type }: { type?: string }) {
             <div className="mt-6">
               <button
                 className="btn-outline"
+                disabled={loadingMore}
+                aria-busy={loadingMore}
                 onClick={async () => {
-                  const next = await searchItems({ q, type, tag, collection, status, limit: PAGE, offset: items.length });
-                  setExtra((e) => [...e, ...next]);
-                  if (next.length < PAGE) setMore(false);
+                  setLoadingMore(true);
+                  setMoreError(false);
+                  try {
+                    const next = await searchItems({ q, type, tag, collection, status, limit: PAGE, offset: items.length });
+                    setExtra((e) => [...e, ...next]);
+                    if (next.length < PAGE) setMore(false);
+                  } catch {
+                    setMoreError(true);
+                  } finally {
+                    setLoadingMore(false);
+                  }
                 }}
               >
-                Show {PAGE} more
+                {loadingMore ? "Loading…" : `Show ${PAGE} more`}
               </button>
+              {moreError && <p role="alert" className="mt-2 text-meta text-danger">Couldn't load more videos. Check your connection and try again.</p>}
             </div>
           )}
         </>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { addNote, deleteNote, saveNote, type ItemFull, type NoteRow } from "../../lib/data";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { focusIfLost } from "./shared";
 
 function NoteEditor({ note, onDeleted }: { note: NoteRow; onDeleted: () => void }) {
   const [body, setBody] = useState(note.body);
@@ -85,7 +86,7 @@ function NoteEditor({ note, onDeleted }: { note: NoteRow; onDeleted: () => void 
             await deleteNote(note.id);
             onDeleted();
           }}
-          onClose={() => setConfirming(false)}
+          onClose={() => { setConfirming(false); focusIfLost("notes-h"); }}
         />
       )}
     </div>

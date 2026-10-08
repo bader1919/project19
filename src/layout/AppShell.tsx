@@ -239,6 +239,7 @@ export function AppShell() {
   const [searching, setSearching] = useState(false);
   const [more, setMore] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -266,6 +267,13 @@ export function AppShell() {
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[232px_minmax(0,1fr)]">
+      <a
+        href="#main"
+        className="btn-primary fixed start-3 top-3 z-[60] -translate-y-24 focus:translate-y-0"
+        onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); mainRef.current?.scrollIntoView({ block: "start" }); }}
+      >
+        Skip to main content
+      </a>
       <aside className="sticky top-0 hidden h-dvh overflow-y-auto border-e border-line bg-paper lg:block">
         <Sidebar />
       </aside>
@@ -289,7 +297,7 @@ export function AppShell() {
           </IconButton>
         </header>
 
-        <main className="mx-auto w-full max-w-item px-4 pb-24 pt-4 sm:px-8 lg:pb-16 lg:pt-6">
+        <main id="main" ref={mainRef} tabIndex={-1} className="mx-auto w-full max-w-item outline-none px-4 pb-24 pt-4 sm:px-8 lg:pb-16 lg:pt-6">
           <ErrorBoundary resetKey={location.pathname}>
             <Outlet />
           </ErrorBoundary>

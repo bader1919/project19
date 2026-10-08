@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { updateItem, type ItemFull } from "../../lib/data";
 import { Skeleton } from "../Skeleton";
-import { Block, CopyButton, asArray } from "./shared";
+import { Block, CopyButton, asArray, focusIfLost } from "./shared";
 
 /** Summary and key points, edited in place. The editor keeps the height of the rendered text so nothing below moves. */
 export function SummaryBlock({ item, working, onSaved }: { item: ItemFull; working: boolean; onSaved: () => void }) {
@@ -33,6 +33,7 @@ export function SummaryBlock({ item, working, onSaved }: { item: ItemFull; worki
     try {
       await updateItem(item.id, { summary, key_points: points.split("\n").map((p) => p.trim()).filter(Boolean) });
       setEditing(false);
+      focusIfLost("summary-h");
       onSaved();
     } catch {
       setError("Couldn't save your changes. Check your connection and try again.");
@@ -58,7 +59,7 @@ export function SummaryBlock({ item, working, onSaved }: { item: ItemFull; worki
         <div className="space-y-4">
           <div>
             <label htmlFor="sum-text" className="mb-1 block text-meta font-semibold text-ink-2">Summary</label>
-            <textarea id="sum-text" dir="auto" className="input font-serif text-read" style={{ minHeight: Math.max(minH * 0.6, 140) }} value={summary} onChange={(e) => setSummary(e.target.value)} />
+            <textarea id="sum-text" autoFocus dir="auto" className="input font-serif text-read" style={{ minHeight: Math.max(minH * 0.6, 140) }} value={summary} onChange={(e) => setSummary(e.target.value)} />
           </div>
           <div>
             <label htmlFor="sum-points" className="mb-1 block text-meta font-semibold text-ink-2">Key points, one per line</label>
@@ -66,7 +67,7 @@ export function SummaryBlock({ item, working, onSaved }: { item: ItemFull; worki
           </div>
           {error && <p role="alert" className="border-s-4 border-danger bg-danger/10 px-3 py-2 text-meta">{error}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-ghost" onClick={() => { setEditing(false); setError(null); }} disabled={busy}>Cancel</button>
+            <button type="button" className="btn-ghost" onClick={() => { setEditing(false); setError(null); focusIfLost("summary-h"); }} disabled={busy}>Cancel</button>
             <button type="button" className="btn-primary" onClick={save} disabled={busy} aria-busy={busy}>{busy ? "Saving…" : "Save summary"}</button>
           </div>
         </div>
