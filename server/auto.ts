@@ -175,7 +175,7 @@ export async function analyzeWithGemini(
   },
   apiKey: string,
   fetchImpl: Fetch = fetch,
-  models = ["gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-flash-latest"],
+  models = ["gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"],
 ): Promise<Record<string, unknown>> {
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,

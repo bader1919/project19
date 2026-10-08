@@ -446,8 +446,8 @@ async function downloadCaptionTrack(track, fetchImpl = fetch) {
 }
 
 // server/transcript.ts
-var DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest";
-var GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash"];
+var DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
+var GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash"];
 var THINKING_OFF = /* @__PURE__ */ new Set(["gemini-3.5-flash"]);
 var isKeyError = (status, message = "") => status === 401 || status === 403 || status === 400 && /api key/i.test(message);
 async function fromYouTube(tracks, fetchImpl = fetch) {
@@ -525,11 +525,13 @@ async function fromYoutubeTranscriptIo(id, apiKey, fetchImpl = fetch) {
     source: "youtube-transcript.io"
   };
 }
-var GEMINI_PROMPT = `Transcribe the speech in this video verbatim, in the language actually spoken (do not translate; keep Arabic in Arabic script).
-Return ONLY a JSON array of segments in time order, one per sentence or short phrase:
-[{"t": <start time in whole seconds from the start of the full video>, "text": "<what was said>"}]
-If there is no speech, return [].
-Also transcribe any URLs that are spoken or shown on screen exactly as they appear.`;
+var GEMINI_PROMPT = `Transcribe ALL speech in this video word for word, in the language actually spoken (do not translate; keep Arabic in Arabic script).
+Do not summarize, shorten or skip anything: every sentence that is said must appear.
+Return ONLY a JSON array in time order, one item per sentence:
+[{"t": "MM:SS", "text": "what was said"}]
+t is the time the sentence starts, measured from the beginning of the FULL video (for example "12:05", or "1:02:03" past an hour).
+Also write any URLs that are spoken or shown on screen exactly as they appear.
+If there is no speech, return [].`;
 async function fromGemini(id, apiKey, model = DEFAULT_GEMINI_MODEL, fetchImpl = fetch, timeoutMs = 11e4, perModelMs = 4e4, clip) {
   const stopAt = Date.now() + timeoutMs;
   let internalErrors = 0;
@@ -1638,7 +1640,7 @@ Return ONLY one JSON object:
 mentions = things said out loud or shown without a link. Use the [123s] markers for timestamp_sec.
 Give EVERY saved link a label. Never invent URLs.`;
 var fence = (t) => t.replace(/<\/?video>/gi, "");
-async function analyzeWithGemini(input, apiKey, fetchImpl = fetch, models = ["gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-flash-latest"]) {
+async function analyzeWithGemini(input, apiKey, fetchImpl = fetch, models = ["gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"]) {
   const material = [
     `EXISTING TOPICS: ${input.topics.join(", ") || "(none yet)"}`,
     `SAVED LINKS:

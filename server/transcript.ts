@@ -17,10 +17,11 @@ export interface TranscriptKeys {
   gemini_model?: string | null;
 }
 
-// Flash-Lite is the fastest and least overloaded free model for transcription.
-export const DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest";
+// 3.5 Flash with thinking off: complete transcripts, ~22 s per 10-minute part, and rarely
+// overloaded (Flash-Lite and Flash-latest answered 503 most of the time in testing).
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 // Gemma models cannot take video input, so they are not used here.
-export const GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash"];
+export const GEMINI_FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash"];
 /** Models known to accept thinking off (faster; transcription needs no reasoning). Others reject the setting. */
 const THINKING_OFF = new Set(["gemini-3.5-flash"]);
 
@@ -150,11 +151,15 @@ export async function fromYoutubeTranscriptIo(id: string, apiKey: string, fetchI
   };
 }
 
-const GEMINI_PROMPT = `Transcribe the speech in this video verbatim, in the language actually spoken (do not translate; keep Arabic in Arabic script).
-Return ONLY a JSON array of segments in time order, one per sentence or short phrase:
-[{"t": <start time in whole seconds from the start of the full video>, "text": "<what was said>"}]
-If there is no speech, return [].
-Also transcribe any URLs that are spoken or shown on screen exactly as they appear.`;
+// Measured on a 19-minute talk: asking for clock times and "every sentence" took the
+// transcript from ~40% of the words (with timestamps like 101 meaning 1:01) to complete.
+const GEMINI_PROMPT = `Transcribe ALL speech in this video word for word, in the language actually spoken (do not translate; keep Arabic in Arabic script).
+Do not summarize, shorten or skip anything: every sentence that is said must appear.
+Return ONLY a JSON array in time order, one item per sentence:
+[{"t": "MM:SS", "text": "what was said"}]
+t is the time the sentence starts, measured from the beginning of the FULL video (for example "12:05", or "1:02:03" past an hour).
+Also write any URLs that are spoken or shown on screen exactly as they appear.
+If there is no speech, return [].`;
 
 interface GeminiResponse {
   candidates?: {
