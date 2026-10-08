@@ -995,7 +995,7 @@ async function saveAnalysis(db, userId, input, by = "claude") {
       }))
     );
   }
-  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: by === "claude" });
+  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
   return {
     ok: true,
     item_id: item.id,
@@ -1632,11 +1632,13 @@ Return ONLY one JSON object:
 {
   "summary": "4-8 sentences: what the video is about and its main conclusions",
   "key_points": ["concrete, re-usable takeaways: steps, numbers, recommendations \u2014 not generic statements"],
-  "topics": ["2-6 short topic names; reuse names from EXISTING TOPICS whenever they fit"],
+  "topics": ["2-6 short topic names describing THIS video"],
   "description_info": [{"kind": "tool|resource|code|requirement|sponsor|social|other", "text": "useful non-link info from the description", "url": "optional"}],
   "mentions": [{"kind": "book|tool|person|website|product|paper|course|other", "name": "...", "context": "why it was mentioned", "timestamp_sec": 123}],
   "link_labels": [{"url": "EXACT url from SAVED LINKS", "label": "short human label", "context": "what it is for"}]
 }
+topics: when an EXISTING TOPIC means the same thing as a topic of this video, use its exact name instead of a new
+synonym. Never include an existing topic only because it is in the list \u2014 each topic must describe this video.
 mentions = things said out loud or shown without a link. Use the [123s] markers for timestamp_sec.
 Give EVERY saved link a label. Never invent URLs.`;
 var fence = (t) => t.replace(/<\/?video>/gi, "");

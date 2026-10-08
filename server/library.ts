@@ -441,9 +441,8 @@ export async function saveAnalysis(db: Db, userId: string, input: AnalysisInput,
     );
   }
 
-  // Claude's topics replace the old ones; the automatic analysis only adds (it may be a redo,
-  // and the user could have adjusted the topics since).
-  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: by === "claude" });
+  // A new analysis (Claude's, or Gemini redoing its own with better material) replaces the old topics.
+  if (a.topics) await setTopics(db, userId, item.id, a.topics, { replace: true });
   return {
     ok: true,
     item_id: item.id,
