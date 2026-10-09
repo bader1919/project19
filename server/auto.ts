@@ -204,6 +204,12 @@ export async function analyzeStep(
   const topics = must(await db.from("tags").select("name").eq("user_id", userId).limit(300), "load topics");
   const segs = (vd.transcript_segments ?? []) as TranscriptSegment[];
   const transcript = segs.length ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n") : (vd.transcript ?? "");
+  // A title alone isn't enough to summarise without making things up. Wait instead: when a
+  // transcript or description arrives later, storeTranscript / applyMetadata queue this again.
+  if (!transcript.trim() && !(vd.description ?? "").trim()) {
+    ok(await db.from("items").update({ analysis_attempts: 5 }).eq("id", itemId), "wait for material");
+    return "gave_up";
+  }
   try {
     const analysis = await analyzeWithGemma(
       {

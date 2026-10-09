@@ -118,3 +118,31 @@ describe("transcribeStep", () => {
     expect(sched?.auto_attempts).toBe(2);
   });
 });
+
+describe("analyzeStep", () => {
+  it("does not invent a summary from a title alone; waits for a transcript or description", async () => {
+    const { analyzeStep } = await import("../server/auto");
+    const updates: Record<string, unknown>[] = [];
+    const rows: Record<string, unknown> = {
+      items: { id: "i", title: "Some video", status: "transcript_pending", analyzed_at: null, analysis_attempts: 0 },
+      video_details: { channel: "C", description: "", transcript_segments: [], transcript: null },
+      user_settings: { gemini_key: "K" },
+      links: [],
+      tags: [],
+    };
+    const chain = (t: string) => {
+      const q: Record<string, unknown> = {};
+      for (const k of ["select", "eq", "is", "not", "limit", "order"]) q[k] = () => q;
+      q.single = async () => ({ data: rows[t], error: null });
+      q.maybeSingle = async () => ({ data: rows[t], error: null });
+      q.update = (patch: Record<string, unknown>) => (updates.push(patch), q);
+      q.then = (res: (v: unknown) => void) => res({ data: Array.isArray(rows[t]) ? rows[t] : [], error: null });
+      return q;
+    };
+    const fetchImpl = vi.fn();
+    const db = { from: chain, rpc: async () => ({ data: null, error: null }) } as never;
+    expect(await analyzeStep(db, "u", "i", fetchImpl as unknown as typeof fetch)).toBe("gave_up");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(updates).toContainEqual({ analysis_attempts: 5 });
+  });
+});

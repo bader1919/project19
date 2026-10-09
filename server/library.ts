@@ -340,6 +340,8 @@ export async function storeTranscript(
  * later. Only touches the automatic (Gemma) analysis — never one Claude wrote.
  */
 export async function requestReanalysis(db: Db, itemId: string) {
+  // Never analysed (e.g. skipped while there was only a title): make it eligible again.
+  ok(await db.from("items").update({ analysis_attempts: 0 }).eq("id", itemId).is("analyzed_at", null), "requeue analysis");
   const { data } = await db
     .from("items")
     .update({ analyzed_at: null, analysis_attempts: 0 })

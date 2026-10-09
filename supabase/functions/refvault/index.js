@@ -814,6 +814,7 @@ async function storeTranscript(db, userId, itemId2, t, opts = {}) {
   return text2;
 }
 async function requestReanalysis(db, itemId2) {
+  ok(await db.from("items").update({ analysis_attempts: 0 }).eq("id", itemId2).is("analyzed_at", null), "requeue analysis");
   const { data } = await db.from("items").update({ analyzed_at: null, analysis_attempts: 0 }).eq("id", itemId2).eq("analyzed_by", "gemma").not("analyzed_at", "is", null).select("status");
   if (!data?.length) return;
   ok(await db.from("items").update({ status: "fetched" }).eq("id", itemId2).eq("status", "analyzed"), "requeue");
@@ -1574,6 +1575,10 @@ async function analyzeStep(db, userId, itemId2, fetchImpl = fetch, budgetMs = 85
   const topics = must(await db.from("tags").select("name").eq("user_id", userId).limit(300), "load topics");
   const segs = vd.transcript_segments ?? [];
   const transcript = segs.length ? segs.map((s) => `[${Math.floor(s.start)}s] ${s.text}`).join("\n") : vd.transcript ?? "";
+  if (!transcript.trim() && !(vd.description ?? "").trim()) {
+    ok(await db.from("items").update({ analysis_attempts: 5 }).eq("id", itemId2), "wait for material");
+    return "gave_up";
+  }
   try {
     const analysis = await analyzeWithGemma(
       {
