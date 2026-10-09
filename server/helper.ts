@@ -113,6 +113,11 @@ export async function helperResult(db: Db, userId: string, body: Record<string, 
     transcript = saved ? "saved" : "kept";
   }
 
+  // "partial": the helper saved details but YouTube blocked the captions for now; it will come back.
+  if (body.partial === true && transcript === "missing") {
+    if (detailsAdded) await requestReanalysis(db, itemId);
+    return { ok: true, transcript, details_added: detailsAdded };
+  }
   const patch: Record<string, unknown> = { helper_done: true };
   // No captions from the PC either: the transcript services take over right away.
   if (transcript === "missing") Object.assign(patch, { pc_failed: true, auto_next_at: null });

@@ -29,7 +29,7 @@ import requests
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "config.json"
 LOG = HERE / "helper.log"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
 
@@ -171,6 +171,9 @@ def ytdlp_fetch(video_id: str, need_transcript: bool) -> tuple[dict, list[dict] 
     pot = os.environ.get("RV_POT_URL")
     if pot:
         opts["extractor_args"] = {"youtubepot-bgutilhttp": {"base_url": [pot]}}
+    cookies = os.environ.get("RV_COOKIES")
+    if cookies and Path(cookies).is_file():
+        opts["cookiefile"] = cookies  # a signed-in session gets past "confirm you're not a bot"
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
         up = str(info.get("upload_date") or "")
@@ -204,9 +207,22 @@ TRANSIENT = {"ConnectionError", "Timeout", "ReadTimeout", "ConnectTimeout", "Pro
 MAX_TRIES = 3
 
 
+class Blocked(Exception):
+    """YouTube is refusing this connection for now (bot check / rate limit)."""
+
+
+BLOCK_SIGNS = ("Sign in to confirm", "IpBlocked", "RequestBlocked", "429", "Too Many Requests", "google.com/sorry")
+
+
+def is_block(e: Exception) -> bool:
+    text = f"{type(e).__name__}: {e}"
+    return any(sign in text for sign in BLOCK_SIGNS)
+
+
 def handle(session: requests.Session, base: str, job: dict, failures: list, tries: dict) -> str:
     vid = job["youtube_id"]
     body: dict = {"item_id": job["item_id"]}
+    blocked: list = []
     if have_ytdlp():
         try:
             meta, segs, lang = ytdlp_fetch(vid, bool(job.get("need_transcript")))
@@ -218,6 +234,8 @@ def handle(session: requests.Session, base: str, job: dict, failures: list, trie
             if body.get("meta"):
                 job = {**job, "need_details": False}
         except Exception as e:  # fall through to the lighter methods below
+            if is_block(e):
+                blocked.append(e)
             log(f"{vid}: yt-dlp: {type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
     if job.get("need_details"):
         try:
@@ -225,12 +243,19 @@ def handle(session: requests.Session, base: str, job: dict, failures: list, trie
             if meta:
                 body["meta"] = meta
         except Exception as e:  # details are a bonus; captions matter more
+            if is_block(e):
+                blocked.append(e)
             log(f"{vid}: could not read details ({e})")
     if job.get("need_transcript"):
         try:
             body["segments"], body["lang"] = fetch_transcript(vid)
         except Exception as e:
             name = type(e).__name__
+            if is_block(e):
+                # YouTube is refusing us: keep the job (save any details we did get), pause, don't count a try.
+                if body.get("meta"):
+                    session.post(f"{base}/result", json={**body, "partial": True}, timeout=60).raise_for_status()
+                raise Blocked(str(e).splitlines()[0][:200] if str(e) else name) from e
             if name not in EXPECTED:
                 tries[vid] = tries.get(vid, 0) + 1
                 if tries[vid] < MAX_TRIES:
@@ -240,6 +265,8 @@ def handle(session: requests.Session, base: str, job: dict, failures: list, trie
                 if name not in TRANSIENT:
                     failures.append(e)
             body["error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"
+    if blocked and not body.get("meta") and not body.get("segments") and "error" not in body:
+        raise Blocked(str(blocked[-1]).splitlines()[0][:200])
     r = session.post(f"{base}/result", json=body, timeout=60)
     r.raise_for_status()
     got = f"{len(body.get('segments', []))} caption lines" if body.get("segments") else f"no captions ({body.get('error', 'not needed')})"
@@ -253,7 +280,7 @@ def one_round(session: requests.Session, base: str, failures: list, tries: dict)
     r.raise_for_status()
     data = r.json()
     for job in data.get("jobs", []):
-        log(handle(session, base, job, failures, tries))
+        log(handle(session, base, job, failures, tries))  # Blocked stops the round
     return int(data.get("poll_seconds", 20))
 
 
@@ -317,12 +344,20 @@ def main() -> None:
     state: dict = {"lock": lock}
     tries: dict = {}
     delay = 20
+    pause = 0  # grows while YouTube keeps refusing this connection
     while True:
         failures: list = []
         try:
             delay = one_round(session, base, failures, tries)
+            pause = 0
             if failures:
                 maybe_upgrade(cfg, state, failures[-1])
+        except Blocked as e:
+            # Retrying right away keeps the block alive; wait it out (30 min, doubling up to 6 h).
+            pause = min(pause * 2, 6 * 3600) if pause else 1800
+            delay = pause
+            hint = "" if os.environ.get("RV_COOKIES") and Path(os.environ["RV_COOKIES"]).is_file() else " A YouTube cookies file avoids this (see the add-on docs)."
+            log(f"YouTube is blocking this connection for now ({e}). Trying again in {pause // 60} min.{hint}")
         except PermissionError as e:
             log(str(e))
             delay = 3600
@@ -331,7 +366,7 @@ def main() -> None:
             delay = 60
         if "--once" in sys.argv:
             return
-        time.sleep(max(5, min(delay, 3600)))
+        time.sleep(max(5, min(delay, 6 * 3600)))
 
 
 if __name__ == "__main__":

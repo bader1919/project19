@@ -1759,6 +1759,10 @@ async function helperResult(db, userId, body) {
     );
     transcript = saved ? "saved" : "kept";
   }
+  if (body.partial === true && transcript === "missing") {
+    if (detailsAdded) await requestReanalysis(db, itemId2);
+    return { ok: true, transcript, details_added: detailsAdded };
+  }
   const patch = { helper_done: true };
   if (transcript === "missing") Object.assign(patch, { pc_failed: true, auto_next_at: null });
   ok(await db.from("video_details").update(patch).eq("item_id", itemId2), "update video");
