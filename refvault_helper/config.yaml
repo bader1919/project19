@@ -1,0 +1,23 @@
+name: RefVault helper
+version: "1.2.0"
+slug: refvault_helper
+description: Fetches YouTube captions and video descriptions for your RefVault library over your home connection.
+url: https://github.com/bader1919/project19
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+map:
+  - share:ro
+options:
+  helper_url: ""
+  pot_server: "http://d5369777-ytm-po-token-generator:4416"
+  cookies_file: "/share/refvault/cookies.txt"
+  cookies: ""
+schema:
+  helper_url: password
+  pot_server: str?
+  cookies_file: str?
+  cookies: password?

@@ -1,0 +1,4 @@
+# Home Assistant add-on repository: add this repo in Settings -> Add-ons -> Add-on store -> Repositories.
+name: RefVault add-ons
+url: https://github.com/bader1919/project19
+maintainer: RefVault
