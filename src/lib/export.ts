@@ -1,4 +1,4 @@
-import { formatTimestamp } from "../../shared/youtube-url";
+import { buildCheatsheet, type CheatItem } from "../../shared/resources";
 import { supabase } from "./supabase";
 
 const TABLES = ["items", "video_details", "links", "tags", "item_tags", "collections", "collection_items", "notes"] as const;
@@ -26,49 +26,44 @@ export async function exportJson() {
   download(`refvault-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(out, null, 2), "application/json");
 }
 
-/** One Markdown file with a section per item — readable anywhere, Obsidian-friendly. */
+/** One Markdown cheatsheet: a section per video with summary, key points and links grouped by kind. */
 export async function exportMarkdown() {
-  const [items, videos, links, tags, itemTags, notes] = await Promise.all(
-    ["items", "video_details", "links", "tags", "item_tags", "notes"].map(fetchAll),
+  const [items, videos, links, tags, itemTags, notes, collections, collectionItems] = await Promise.all(
+    ["items", "video_details", "links", "tags", "item_tags", "notes", "collections", "collection_items"].map(fetchAll),
   );
-  const by = <T extends Record<string, unknown>>(rows: T[], key: string) => {
-    const m = new Map<string, T[]>();
+  const by = (rows: Record<string, unknown>[], key: string) => {
+    const m = new Map<string, Record<string, unknown>[]>();
     rows.forEach((r) => m.set(String(r[key]), [...(m.get(String(r[key])) ?? []), r]));
     return m;
   };
   const videoBy = new Map(videos.map((v) => [String(v.item_id), v]));
   const linksBy = by(links, "item_id");
   const notesBy = by(notes, "item_id");
-  const tagName = new Map(tags.map((t) => [String(t.id), String(t.name)]));
   const tagsBy = by(itemTags, "item_id");
+  const colsBy = by(collectionItems, "item_id");
+  const tagName = new Map(tags.map((t) => [String(t.id), String(t.name)]));
+  const colName = new Map(collections.map((c) => [String(c.id), String(c.name)]));
+  const names = (rows: Record<string, unknown>[] | undefined, key: string, lookup: Map<string, string>) =>
+    (rows ?? []).map((r) => lookup.get(String(r[key]))).filter((x): x is string => !!x);
 
-  const parts = ["# RefVault export", "", `Exported ${new Date().toLocaleString()}`, ""];
-  for (const it of items) {
+  const cheat: CheatItem[] = items.map((it) => {
     const id = String(it.id);
     const v = videoBy.get(id);
-    parts.push(`## ${it.title}`, "");
-    parts.push(`- Source: ${it.source_url ?? ""}`);
-    if (v?.channel) parts.push(`- Channel: ${v.channel}`);
-    const t = (tagsBy.get(id) ?? []).map((x) => tagName.get(String(x.tag_id))).filter(Boolean);
-    if (t.length) parts.push(`- Topics: ${t.map((x) => `#${String(x).replace(/\s+/g, "-")}`).join(" ")}`);
-    parts.push("");
-    if (it.summary) parts.push("### Summary", "", String(it.summary), "");
-    const kp = (Array.isArray(it.key_points) ? it.key_points : []).filter((k): k is string => typeof k === "string");
-    if (kp.length) parts.push("### Key points", "", ...kp.map((k) => `- ${k}`), "");
-    const ls = linksBy.get(id) ?? [];
-    if (ls.length) {
-      parts.push("### Links", "");
-      for (const l of ls) {
-        const ts = l.timestamp_sec !== null && l.timestamp_sec !== undefined ? ` (${formatTimestamp(Number(l.timestamp_sec))})` : "";
-        parts.push(`- [${l.label || l.domain || l.url}](${l.url})${ts}${l.context ? ` — ${l.context}` : ""}`);
-      }
-      parts.push("");
-    }
-    const ms = (Array.isArray(v?.mentions) ? (v!.mentions as { kind: string; name: string; context?: string }[]) : []).filter((m) => m && typeof m.name === "string");
-    if (ms.length) parts.push("### Mentioned", "", ...ms.map((m) => `- **${m.name}** (${m.kind})${m.context ? ` — ${m.context}` : ""}`), "");
-    const ns = (notesBy.get(id) ?? []).filter((n) => String(n.body).trim());
-    if (ns.length) parts.push("### My notes", "", ...ns.map((n) => `${n.body}\n`), "");
-    parts.push("---", "");
-  }
-  download(`refvault-${new Date().toISOString().slice(0, 10)}.md`, parts.join("\n"), "text/markdown");
+    return {
+      title: String(it.title ?? ""),
+      source_url: (it.source_url as string | null) ?? null,
+      summary: (it.summary as string | null) ?? null,
+      key_points: (Array.isArray(it.key_points) ? it.key_points : []).filter((k): k is string => typeof k === "string"),
+      channel: (v?.channel as string | null) ?? null,
+      topics: names(tagsBy.get(id), "tag_id", tagName),
+      collections: names(colsBy.get(id), "collection_id", colName),
+      links: (linksBy.get(id) ?? []).map((l) => ({
+        url: String(l.url), label: (l.label as string | null) ?? null, domain: (l.domain as string | null) ?? null,
+        context: (l.context as string | null) ?? null, timestamp_sec: (l.timestamp_sec as number | null) ?? null,
+      })),
+      mentions: (Array.isArray(v?.mentions) ? (v!.mentions as CheatItem["mentions"]) : []).filter((m) => m && typeof m.name === "string"),
+      notes: (notesBy.get(id) ?? []).map((n) => String(n.body)).filter((b) => b.trim()),
+    };
+  });
+  download(`refvault-cheatsheet-${new Date().toISOString().slice(0, 10)}.md`, buildCheatsheet(cheat, new Date().toLocaleString()), "text/markdown");
 }

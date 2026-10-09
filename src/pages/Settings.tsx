@@ -368,7 +368,7 @@ export function Settings() {
               {busy === "json" ? "Preparing…" : "Download full backup (JSON)"}
             </button>
             <button className="btn-outline" disabled={!!busy} onClick={run("md", exportMarkdown)}>
-              {busy === "md" ? "Preparing…" : "Download readable export (Markdown)"}
+              {busy === "md" ? "Preparing…" : "Download cheatsheet (Markdown)"}
             </button>
           </div>
           {exportError && <ErrorBox message={exportError} />}

@@ -11,6 +11,7 @@ import { Home } from "./pages/Home";
 import { Library } from "./pages/Library";
 import { ItemPage } from "./pages/ItemPage";
 import { Links } from "./pages/Links";
+import { Repositories } from "./pages/Repositories";
 import { Topics } from "./pages/Topics";
 import { Collections } from "./pages/Collections";
 import { Notes } from "./pages/Notes";
@@ -45,6 +46,7 @@ function App() {
         ))}
         <Route path="item/:id" element={<ItemPage />} />
         <Route path="links" element={<Links />} />
+        <Route path="repositories" element={<Repositories />} />
         <Route path="topics" element={<Topics />} />
         <Route path="collections" element={<Collections />} />
         <Route path="notes" element={<Notes />} />

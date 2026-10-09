@@ -19,12 +19,14 @@ export type LinkRowData = LinkData & { items?: { title: string } };
  * - `actions`: extra end-side controls (e.g. edit and remove on the video page).
  */
 export function LinkRow({
-  link, compact = false, onSeek, actions,
+  link, compact = false, onSeek, actions, extra,
 }: {
   link: LinkRowData;
   compact?: boolean;
   onSeek?: (sec: number) => void;
   actions?: React.ReactNode;
+  /** Extra line under the label (e.g. paper title and authors). */
+  extra?: React.ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -71,6 +73,7 @@ export function LinkRow({
             {link.context && <span>{link.context}</span>}
           </p>
         )}
+        {extra}
         {!compact && link.items && (
           <Link
             to={fromTo}

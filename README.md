@@ -8,6 +8,7 @@
 - an **AI summary, key points and topics**, written by Claude through the RefVault connector
 - **useful details from the description** (tools, resources, discount codes) and **things mentioned out loud without a link** (books, tools, people)
 - **your own notes** (autosaved)
+- a **Repositories** page (every GitHub project linked from your videos, with optional stars and language from GitHub's public API), **Documentation** and **Papers** filters on the Links page (paper titles and authors from OpenAlex), and a Markdown **cheatsheet** export in Settings
 
 Then you can **search everything by topic**: titles, summaries, transcripts, links and notes, in English or Arabic. Arabic search ignores diacritics and hamza and alef variants, so ادوات finds أدوات.
 

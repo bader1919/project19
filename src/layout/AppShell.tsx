@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { FolderOpen, Home, Library, Link2, MoreHorizontal, NotebookPen, Plus, Search, Settings, Tags } from "lucide-react";
+import { FolderOpen, GitBranch, Home, Library, Link2, MoreHorizontal, NotebookPen, Plus, Search, Settings, Tags } from "lucide-react";
 import { MODULES } from "../modules/registry";
 import { AddVideoDialog } from "../components/AddVideoDialog";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -13,13 +13,14 @@ const MAIN_NAV = [
 ];
 const ORGANIZE_NAV = [
   { to: "/links", label: "Links", icon: Link2 },
+  { to: "/repositories", label: "Repositories", icon: GitBranch },
   { to: "/topics", label: "Topics", icon: Tags },
   { to: "/collections", label: "Collections", icon: FolderOpen },
   { to: "/notes", label: "Notes", icon: NotebookPen },
 ];
 
 const PAGE_TITLES: [string, string][] = [
-  ["/library", "Library"], ["/videos", "Videos"], ["/links", "Links"], ["/topics", "Topics"],
+  ["/library", "Library"], ["/videos", "Videos"], ["/links", "Links"], ["/repositories", "Repositories"], ["/topics", "Topics"],
   ["/collections", "Collections"], ["/notes", "Notes"], ["/settings", "Settings"], ["/item", "Video"],
 ];
 function pageTitle(path: string) {
@@ -210,7 +211,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
     <Sheet title="More" onClose={onClose}>
       <nav className="-mx-2 flex flex-col" aria-label="More">
         {MODULES.filter((m) => m.enabled).map((m) => <MoreLink key={m.type} to={m.path} label={m.label} icon={m.icon} onClick={onClose} />)}
-        {[ORGANIZE_NAV[1], ORGANIZE_NAV[2], ORGANIZE_NAV[3]].map((n) => <MoreLink key={n.to} {...n} onClick={onClose} />)}
+        {ORGANIZE_NAV.slice(1).map((n) => <MoreLink key={n.to} {...n} onClick={onClose} />)}
         <MoreLink to="/settings" label="Settings" icon={Settings} onClick={onClose} />
         {MODULES.filter((m) => !m.enabled).map((m) => (
           <span key={m.type} aria-disabled="true" className="flex min-h-[44px] items-center gap-3 px-2 text-body text-ink-2">
