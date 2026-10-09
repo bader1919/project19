@@ -102,6 +102,46 @@ export async function fromSupadata(
   throw new Error("Supadata is still processing this video — press retry in a minute");
 }
 
+export interface SupadataMetadata {
+  description: string | null;
+  duration_sec: number | null;
+  published_at: string | null;
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
+const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+
+/**
+ * Video details through Supadata (the same key as the transcript). YouTube blocks the server from
+ * reading the description, and the description is where most of a video's links are.
+ * Tries the unified /v1/metadata endpoint, then the older /v1/youtube/video one.
+ */
+export async function supadataMetadata(id: string, apiKey: string, fetchImpl: Fetch = fetch): Promise<SupadataMetadata> {
+  const headers = { "x-api-key": apiKey };
+  const urls = [
+    `https://api.supadata.ai/v1/metadata?url=${encodeURIComponent(youtubeWatchUrl(id))}`,
+    `https://api.supadata.ai/v1/youtube/video?id=${encodeURIComponent(id)}`,
+  ];
+  let lastError = "Supadata returned no details";
+  for (const url of urls) {
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10000) });
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      lastError = `Supadata ${res.status}`;
+      if (res.status === 401 || res.status === 403) break;
+      continue;
+    }
+    const media = (body.media ?? {}) as Record<string, unknown>;
+    const out = {
+      description: str(body.description),
+      duration_sec: num(media.duration) ?? num(body.duration) ?? num(body.lengthSeconds),
+      published_at: str(body.createdAt) ?? str(body.uploadDate) ?? str(body.publishedAt),
+    };
+    if (out.description || out.duration_sec) return out;
+  }
+  throw new Error(lastError);
+}
+
 interface YtioTrack {
   language?: string;
   transcript?: { text: string; start: string | number; dur: string | number }[];

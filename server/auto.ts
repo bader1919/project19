@@ -7,8 +7,8 @@
  */
 import type { TranscriptSegment } from "../shared/types";
 import { must, ok, type Db } from "./db";
-import { saveAnalysis, storeTranscript, userKeys, WAITING_MESSAGE } from "./library";
-import { getTranscript } from "./transcript";
+import { applyMetadata, saveAnalysis, storeTranscript, userKeys, WAITING_MESSAGE } from "./library";
+import { getTranscript, supadataMetadata } from "./transcript";
 
 type Fetch = typeof fetch;
 
@@ -28,7 +28,7 @@ export type StepResult = "done" | "more" | "retry" | "gave_up";
 /** Fetch the transcript from the transcript APIs (YouTube blocks the server itself). */
 export async function transcribeStep(db: Db, userId: string, itemId: string, fetchImpl: Fetch = fetch): Promise<StepResult> {
   const vd = must(
-    await db.from("video_details").select("youtube_id, transcript, auto_attempts").eq("item_id", itemId).single(),
+    await db.from("video_details").select("youtube_id, transcript, description, auto_attempts").eq("item_id", itemId).single(),
     "load video",
   );
   if (vd.transcript) return "done";
@@ -42,6 +42,15 @@ export async function transcribeStep(db: Db, userId: string, itemId: string, fet
       "No transcript yet: add a Supadata or youtube-transcript.io key in Settings, run the PC helper, or paste the transcript.",
     );
     return "gave_up";
+  }
+  // The description (and its links) too, when the server couldn't read it from YouTube.
+  if (!vd.description && keys.supadata_key) {
+    try {
+      const meta = await supadataMetadata(vd.youtube_id, keys.supadata_key, fetchImpl);
+      if (meta.description) await applyMetadata(db, userId, itemId, meta, fetchImpl);
+    } catch (e) {
+      console.log(`no details for ${itemId}: ${(e as Error).message}`);
+    }
   }
   const t = await getTranscript(vd.youtube_id, [], keys, fetchImpl, Date.now() + 60_000);
   if (t.result?.segments.length) {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { analyzeWithGemma, GEMMA_MODELS, transcribeStep } from "../server/auto";
+import { supadataMetadata } from "../server/transcript";
 import { cleanMeta, cleanSegments } from "../server/helper";
 
 const reply = (text: string, status = 200) =>
@@ -113,7 +114,8 @@ describe("transcribeStep", () => {
       return new Response(JSON.stringify({ error: "busy" }), { status: 500 });
     });
     expect(await transcribeStep(db, "u", "i", fetchImpl as unknown as typeof fetch)).toBe("retry");
-    expect(hosts).toEqual(["api.supadata.ai"]);
+    expect(hosts.length).toBeGreaterThan(0);
+    expect(hosts.every((h) => h === "api.supadata.ai")).toBe(true); // never Google/Gemini
     const sched = updates.find((u) => u.table === "video_details")?.patch;
     expect(sched?.auto_attempts).toBe(2);
   });
@@ -144,5 +146,33 @@ describe("analyzeStep", () => {
     expect(await analyzeStep(db, "u", "i", fetchImpl as unknown as typeof fetch)).toBe("gave_up");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(updates).toContainEqual({ analysis_attempts: 5 });
+  });
+});
+
+describe("supadataMetadata", () => {
+  it("reads description, duration and date from /v1/metadata with the same key", async () => {
+    const fetchImpl = vi.fn(async (u: string, init: RequestInit) => {
+      expect((init.headers as Record<string, string>)["x-api-key"]).toBe("S");
+      expect(u).toContain("/v1/metadata?url=");
+      return new Response(JSON.stringify({ description: "Links: https://github.com/x/y", media: { duration: 612 }, createdAt: "2026-10-04T10:00:00Z" }));
+    });
+    expect(await supadataMetadata("bco5zvN2vMY", "S", fetchImpl as unknown as typeof fetch)).toEqual({
+      description: "Links: https://github.com/x/y",
+      duration_sec: 612,
+      published_at: "2026-10-04T10:00:00Z",
+    });
+  });
+
+  it("falls back to the older /v1/youtube/video endpoint, and stops on a bad key", async () => {
+    const urls: string[] = [];
+    const fallback = vi.fn(async (u: string) => {
+      urls.push(u);
+      return u.includes("/v1/metadata") ? new Response("{}", { status: 404 }) : new Response(JSON.stringify({ description: "D", duration: 60 }));
+    });
+    expect((await supadataMetadata("id", "S", fallback as unknown as typeof fetch)).description).toBe("D");
+    expect(urls[1]).toContain("/v1/youtube/video?id=id");
+    const bad = vi.fn(async () => new Response("{}", { status: 401 }));
+    await expect(supadataMetadata("id", "S", bad as unknown as typeof fetch)).rejects.toThrow(/401/);
+    expect(bad).toHaveBeenCalledTimes(1);
   });
 });
