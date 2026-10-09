@@ -5,6 +5,19 @@ OPTS=/data/options.json
 export RV_HELPER_URL="$(python -c 'import json;print(json.load(open("/data/options.json")).get("helper_url",""))')"
 export RV_POT_URL="$(python -c 'import json;print(json.load(open("/data/options.json")).get("pot_server") or "")')"
 export RV_COOKIES="$(python -c 'import json;print(json.load(open("/data/options.json")).get("cookies_file") or "")')"
+# Cookies pasted into the add-on options win over the share file; kept in /data, which yt-dlp
+# may rewrite as YouTube refreshes the session.
+python - <<'PY'
+import json
+c = (json.load(open("/data/options.json")).get("cookies") or "").strip()
+if c:
+    if not c.startswith("# "):
+        c = "# Netscape HTTP Cookie File\n" + c
+    open("/data/cookies.txt", "w").write(c + "\n")
+PY
+if [ -f /data/cookies.txt ] && python -c 'import json,sys;sys.exit(0 if (json.load(open("/data/options.json")).get("cookies") or "").strip() else 1)'; then
+  export RV_COOKIES=/data/cookies.txt
+fi
 export RV_LOG_STDOUT=1
 if [ -z "$RV_HELPER_URL" ]; then
   echo "Set helper_url in the add-on Configuration tab (RefVault -> Settings -> PC helper -> Create install command, the URL inside it)."

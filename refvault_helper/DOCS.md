@@ -16,3 +16,6 @@ Options:
 
 If YouTube blocks your connection, the helper pauses (30 minutes, then longer) instead of
 retrying, which lets the block clear on its own.
+
+Easier than the share folder: paste the whole `cookies.txt` content into the `cookies` option
+(hidden like a password). It is stored only in the add-on's private data folder.
