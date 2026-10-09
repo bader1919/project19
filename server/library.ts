@@ -258,7 +258,7 @@ function dedupeByUrl<T extends { url: string }>(links: T[]): T[] {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function ownedItem(db: Db, userId: string, itemId: string) {
+export async function ownedItem(db: Db, userId: string, itemId: string) {
   if (!UUID_RE.test(itemId)) throw new HttpError(404, `No item ${itemId} in your library`);
   const { data } = await db.from("items").select("id, type, status").eq("id", itemId).eq("user_id", userId).maybeSingle();
   if (!data) throw new HttpError(404, `No item ${itemId} in your library`);

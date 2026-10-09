@@ -162,7 +162,7 @@ function ItemView({ id }: { id: string }) {
           <MentionsBlock item={item} onSeek={seek} />
           <DescriptionInfoBlock info={info} onSeek={seek} />
           <TranscriptBlock item={item} playing={start} onSeek={seek} onChanged={reload} />
-          <DescriptionBlock description={v?.description} />
+          <DescriptionBlock itemId={item.id} description={v?.description} onChanged={reload} />
         </div>
       </div>
     </div>

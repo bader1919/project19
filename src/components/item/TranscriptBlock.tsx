@@ -49,14 +49,14 @@ function MissingPanel({ item, segCount, onChanged }: { item: ItemFull; segCount:
         )}
         {item.error && !message && <p className="mt-1 text-meta text-ink-2">{item.error}</p>}
         <p className="mt-1 text-meta text-ink-2">
-          Your PC helper (Settings) fetches YouTube's captions; when your computer is off, the transcript services in Settings do it instead. This page updates by itself.
+          YouTube blocks the app from reading captions itself. Paste the transcript below (on YouTube: "… more", then "Show transcript", select all and copy), or add a Supadata key in Settings to make it automatic. This page updates by itself.
         </p>
       </div>
       <button type="button" className="btn-outline" onClick={() => retry()} disabled={busy} aria-busy={busy}>
         <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} aria-hidden="true" /> Try again
       </button>
       <div>
-        <label htmlFor="paste-transcript" className="mb-1 block text-meta font-semibold text-ink-2">Or paste the transcript</label>
+        <label htmlFor="paste-transcript" className="mb-1 block text-meta font-semibold text-ink-2">Paste the transcript</label>
         <textarea id="paste-transcript" dir="auto" className="input h-32" value={paste} onChange={(e) => setPaste(e.target.value)} />
       </div>
       <button type="button" className="btn-primary" disabled={!paste.trim() || busy} onClick={() => retry(paste)}>Save pasted transcript</button>

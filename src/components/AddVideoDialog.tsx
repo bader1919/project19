@@ -21,7 +21,8 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
   const navigate = useNavigate();
   const [url, setUrl] = useState(() => (initialText ? firstYouTubeUrl(initialText) : ""));
   const [transcript, setTranscript] = useState("");
-  const [showPaste, setShowPaste] = useState(false);
+  const [description, setDescription] = useState("");
+  const [showPaste, setShowPaste] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
@@ -34,7 +35,7 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
     setBusy(true);
     setError(null);
     try {
-      setResult(await api<IngestResult>("/ingest", { body: { url, transcript: transcript || undefined } }));
+      setResult(await api<IngestResult>("/ingest", { body: { url, transcript: transcript.trim() || undefined, description: description.trim() || undefined } }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -92,20 +93,33 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
           {videoId && <Thumb src={`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`} title={url} className="aspect-video w-full" />}
 
           {showPaste ? (
-            <div>
-              <label htmlFor="yt-transcript" className="mb-1 block text-meta font-semibold text-ink-2">Transcript (optional)</label>
-              <textarea
-                id="yt-transcript"
-                dir="auto"
-                className="input h-32"
-                placeholder="Paste the transcript here if automatic fetching fails"
-                value={transcript}
-                onChange={(e) => setTranscript(e.target.value)}
-              />
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="yt-description" className="mb-1 block text-meta font-semibold text-ink-2">Description (optional)</label>
+                <textarea
+                  id="yt-description"
+                  dir="auto"
+                  className="input h-28"
+                  placeholder="Paste the text under the video on YouTube (… more). Its links are saved too."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="yt-transcript" className="mb-1 block text-meta font-semibold text-ink-2">Transcript (optional)</label>
+                <textarea
+                  id="yt-transcript"
+                  dir="auto"
+                  className="input h-32"
+                  placeholder="On YouTube: … more → Show transcript, select all lines, copy, paste here. Timestamps are kept."
+                  value={transcript}
+                  onChange={(e) => setTranscript(e.target.value)}
+                />
+              </div>
             </div>
           ) : (
             <button type="button" className="inline-flex min-h-[44px] items-center text-meta text-binding hover:underline sm:min-h-[32px]" onClick={() => setShowPaste(true)}>
-              I already have the transcript
+              Paste the description and transcript
             </button>
           )}
 
@@ -131,7 +145,7 @@ export function AddVideoDialog({ initialText, onClose }: { initialText?: string;
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <button className="btn-ghost" onClick={() => { setResult(null); setUrl(""); setTranscript(""); }}>Save another</button>
+            <button className="btn-ghost" onClick={() => { setResult(null); setUrl(""); setTranscript(""); setDescription(""); }}>Save another</button>
             <button autoFocus className="btn-primary" onClick={() => { onClose(); navigate(`/item/${result.item_id}`); }}>Open video</button>
           </div>
         </div>

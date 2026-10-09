@@ -1792,7 +1792,26 @@ async function handleIngest(req) {
     const userId = await userFromRequest(db, req);
     const body = await req.json().catch(() => ({}));
     if (!body.item_id && !body.url) throw new HttpError(400, "Paste a YouTube link");
-    const result = body.item_id ? await retryTranscript(db, userId, body.item_id, body.transcript) : await ingestVideo(db, userId, body.url, { manualTranscript: body.transcript });
+    const description = typeof body.description === "string" ? body.description.trim().slice(0, 2e4) : "";
+    const transcript = typeof body.transcript === "string" && body.transcript.trim() ? body.transcript : void 0;
+    let result;
+    let itemId2;
+    if (body.item_id && description && !transcript) {
+      itemId2 = (await ownedItem(db, userId, body.item_id)).id;
+      result = { ok: true, item_id: itemId2 };
+    } else if (body.item_id) {
+      result = { ...await retryTranscript(db, userId, body.item_id, transcript) };
+      itemId2 = body.item_id;
+    } else {
+      const saved = await ingestVideo(db, userId, body.url, { manualTranscript: transcript });
+      result = { ...saved };
+      itemId2 = String(result.item_id);
+    }
+    if (description) {
+      await applyMetadata(db, userId, itemId2, { description });
+      await requestReanalysis(db, itemId2);
+      result = { ...result, description_saved: true };
+    }
     background(runWorker(db, 12e4));
     return withCors(json(result));
   } catch (e) {

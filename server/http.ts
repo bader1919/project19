@@ -1,6 +1,6 @@
 import { adminDb, ok } from "./db";
 import { errorResponse, hashToken, HttpError, json, newToken, userFromRequest, userFromToken } from "./auth";
-import { ingestVideo, retryTranscript } from "./library";
+import { applyMetadata, ingestVideo, ownedItem, requestReanalysis, retryTranscript } from "./library";
 import { handleMcpHttp } from "./mcp";
 import { runWorker } from "./auto";
 import { helperJobs, helperResult } from "./helper";
@@ -26,11 +26,30 @@ export async function handleIngest(req: Request): Promise<Response> {
     if (req.method !== "POST") throw new HttpError(405, "Use POST");
     const db = adminDb();
     const userId = await userFromRequest(db, req);
-    const body = (await req.json().catch(() => ({}))) as { url?: string; item_id?: string; transcript?: string };
+    const body = (await req.json().catch(() => ({}))) as { url?: string; item_id?: string; transcript?: string; description?: string };
     if (!body.item_id && !body.url) throw new HttpError(400, "Paste a YouTube link");
-    const result = body.item_id
-      ? await retryTranscript(db, userId, body.item_id, body.transcript)
-      : await ingestVideo(db, userId, body.url!, { manualTranscript: body.transcript });
+    const description = typeof body.description === "string" ? body.description.trim().slice(0, 20_000) : "";
+    const transcript = typeof body.transcript === "string" && body.transcript.trim() ? body.transcript : undefined;
+    let result: Record<string, unknown>;
+    let itemId: string;
+    if (body.item_id && description && !transcript) {
+      // Only a pasted description: store it (and its links), no transcript retry.
+      itemId = (await ownedItem(db, userId, body.item_id)).id;
+      result = { ok: true, item_id: itemId };
+    } else if (body.item_id) {
+      result = { ...(await retryTranscript(db, userId, body.item_id, transcript)) };
+      itemId = body.item_id;
+    } else {
+      const saved = await ingestVideo(db, userId, body.url!, { manualTranscript: transcript });
+      result = { ...saved };
+      itemId = String(result.item_id);
+    }
+    if (description) {
+      // The pasted description wins over whatever was fetched; links in it are extracted and the summary redone.
+      await applyMetadata(db, userId, itemId, { description });
+      await requestReanalysis(db, itemId);
+      result = { ...result, description_saved: true };
+    }
     // Start the transcript / analysis now instead of waiting for the next cron minute.
     background(runWorker(db, 120_000));
     return withCors(json(result));
